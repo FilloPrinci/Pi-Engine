@@ -24,6 +24,12 @@ public:
     core::Extent2D GetDrawableSize() override;
     void Shutdown() override;
 
+    // Not part of IDisplayBackend (docs/01 section 5.2 defines that interface exactly;
+    // DirectDRMDisplayBackend has no titlebar to update). Handy for samples to show a
+    // live FPS counter without pulling in the debug-overlay dependency M2 brings
+    // (docs/01 section 4, module 4).
+    void SetWindowTitle(const char* title);
+
 private:
     SDL_Window* m_window = nullptr;
     bool m_shouldQuit = false;

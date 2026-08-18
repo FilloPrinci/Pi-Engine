@@ -5,6 +5,7 @@
 
 #include <volk.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -323,6 +324,13 @@ int main(int /*argc*/, char** /*argv*/) {
     InputState input;
     int currentFrame = 0;
     bool running = true;
+
+    // FPS counter in the window title -- a stopgap ahead of the real Dear ImGui debug
+    // overlay (docs/01 section 4, module 4), which lands in M2. Cheap and visible in
+    // every screenshot, so every milestone sample through M1 can reuse this pattern.
+    std::uint32_t framesSinceReport = 0;
+    auto lastFpsReportTime = std::chrono::steady_clock::now();
+
     while (running) {
         displayBackend.PollEvents(input);
         if (input.quitRequested) {
@@ -409,6 +417,18 @@ int main(int /*argc*/, char** /*argv*/) {
         }
 
         currentFrame = (currentFrame + 1) % kMaxFramesInFlight;
+
+        ++framesSinceReport;
+        const auto now = std::chrono::steady_clock::now();
+        const std::chrono::duration<double> elapsed = now - lastFpsReportTime;
+        if (elapsed.count() >= 0.5) {
+            const double fps = static_cast<double>(framesSinceReport) / elapsed.count();
+            char title[64];
+            std::snprintf(title, sizeof(title), "Pi-Engine -- m0_hello_vulkan (%.0f FPS)", fps);
+            displayBackend.SetWindowTitle(title);
+            framesSinceReport = 0;
+            lastFpsReportTime = now;
+        }
     }
 
     vkDeviceWaitIdle(device);

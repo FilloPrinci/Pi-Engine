@@ -79,6 +79,10 @@ core::Extent2D SDL2DisplayBackend::GetDrawableSize() {
     return core::Extent2D{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)};
 }
 
+void SDL2DisplayBackend::SetWindowTitle(const char* title) {
+    SDL_SetWindowTitle(m_window, title);
+}
+
 void SDL2DisplayBackend::Shutdown() {
     if (m_window != nullptr) {
         SDL_DestroyWindow(m_window);

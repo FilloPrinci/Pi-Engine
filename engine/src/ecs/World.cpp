@@ -24,6 +24,10 @@ void World::DestroyEntity(Entity entity) {
     }
     RemoveTransform(entity);
     RemoveMesh(entity);
+    RemoveRigidbody(entity); // Note: does NOT destroy the corresponding Jolt body -- no
+                             // milestone through M4 destroys a physics entity at runtime,
+                             // PhysicsWorld gains that responsibility once one does.
+    RemoveCollider(entity);
 
     EntityRecord& record = m_entityRecords[entity.index];
     record.alive = false;
@@ -52,6 +56,22 @@ MeshComponent* World::GetMesh(Entity entity) { return m_meshes.Get(entity); }
 const MeshComponent* World::GetMesh(Entity entity) const { return m_meshes.Get(entity); }
 bool World::HasMesh(Entity entity) const { return m_meshes.Has(entity); }
 
+RigidbodyComponent& World::AddRigidbody(Entity entity, const RigidbodyComponent& value) {
+    return m_rigidbodies.Add(entity, value);
+}
+void World::RemoveRigidbody(Entity entity) { m_rigidbodies.Remove(entity); }
+RigidbodyComponent* World::GetRigidbody(Entity entity) { return m_rigidbodies.Get(entity); }
+const RigidbodyComponent* World::GetRigidbody(Entity entity) const { return m_rigidbodies.Get(entity); }
+bool World::HasRigidbody(Entity entity) const { return m_rigidbodies.Has(entity); }
+
+ColliderComponent& World::AddCollider(Entity entity, const ColliderComponent& value) {
+    return m_colliders.Add(entity, value);
+}
+void World::RemoveCollider(Entity entity) { m_colliders.Remove(entity); }
+ColliderComponent* World::GetCollider(Entity entity) { return m_colliders.Get(entity); }
+const ColliderComponent* World::GetCollider(Entity entity) const { return m_colliders.Get(entity); }
+bool World::HasCollider(Entity entity) const { return m_colliders.Has(entity); }
+
 template <>
 TransformComponent* World::GetComponent<TransformComponent>(Entity entity) {
     return GetTransform(entity);
@@ -67,6 +87,22 @@ MeshComponent* World::GetComponent<MeshComponent>(Entity entity) {
 template <>
 const MeshComponent* World::GetComponent<MeshComponent>(Entity entity) const {
     return GetMesh(entity);
+}
+template <>
+RigidbodyComponent* World::GetComponent<RigidbodyComponent>(Entity entity) {
+    return GetRigidbody(entity);
+}
+template <>
+const RigidbodyComponent* World::GetComponent<RigidbodyComponent>(Entity entity) const {
+    return GetRigidbody(entity);
+}
+template <>
+ColliderComponent* World::GetComponent<ColliderComponent>(Entity entity) {
+    return GetCollider(entity);
+}
+template <>
+const ColliderComponent* World::GetComponent<ColliderComponent>(Entity entity) const {
+    return GetCollider(entity);
 }
 
 } // namespace engine::ecs

@@ -8,7 +8,10 @@
 - `World.h` + `.cpp` -- done (M2): entity lifetime (create/destroy, generation
   invalidation, index recycling) + Transform/Mesh component storage.
 - `components/TransformComponent.h`, `components/MeshComponent.h` -- done (M2).
-- `components/RigidbodyComponent.h`, `components/ColliderComponent.h` -- M4.
+- `components/RigidbodyComponent.h`, `components/ColliderComponent.h` -- done (M4).
+  `RigidbodyComponent` stores a packed `uint32` body id, not a `JPH::BodyID`, so this file
+  (included transitively by every `World.h` consumer) never pulls Jolt's headers in --
+  `physics/PhysicsWorld.cpp` is the only place that converts between the two.
 
 Never a permanent raw pointer to a component — always `ComponentHandle<T>`
 (script/ComponentHandle.h, done M3, CLAUDE.md rule 4). M2's systems (FrustumCuller) still

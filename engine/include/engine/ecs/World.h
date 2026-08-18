@@ -2,7 +2,9 @@
 
 #include "engine/ecs/ComponentStorage.h"
 #include "engine/ecs/Entity.h"
+#include "engine/ecs/components/ColliderComponent.h"
 #include "engine/ecs/components/MeshComponent.h"
+#include "engine/ecs/components/RigidbodyComponent.h"
 #include "engine/ecs/components/TransformComponent.h"
 
 #include <vector>
@@ -32,16 +34,31 @@ public:
     const MeshComponent* GetMesh(Entity entity) const;
     bool HasMesh(Entity entity) const;
 
+    RigidbodyComponent& AddRigidbody(Entity entity, const RigidbodyComponent& value = {});
+    void RemoveRigidbody(Entity entity);
+    RigidbodyComponent* GetRigidbody(Entity entity);
+    const RigidbodyComponent* GetRigidbody(Entity entity) const;
+    bool HasRigidbody(Entity entity) const;
+
+    ColliderComponent& AddCollider(Entity entity, const ColliderComponent& value = {});
+    void RemoveCollider(Entity entity);
+    ColliderComponent* GetCollider(Entity entity);
+    const ColliderComponent* GetCollider(Entity entity) const;
+    bool HasCollider(Entity entity) const;
+
     ComponentStorage<TransformComponent>& Transforms() { return m_transforms; }
     ComponentStorage<MeshComponent>& Meshes() { return m_meshes; }
     const ComponentStorage<MeshComponent>& Meshes() const { return m_meshes; }
+    ComponentStorage<RigidbodyComponent>& Rigidbodies() { return m_rigidbodies; }
+    const ComponentStorage<RigidbodyComponent>& Rigidbodies() const { return m_rigidbodies; }
+    ComponentStorage<ColliderComponent>& Colliders() { return m_colliders; }
 
     // Generic dispatch to the typed Get*() accessors above, for script/ComponentHandle.h
     // (M3): a handle just needs "give me my T back given a World and an Entity" without
-    // World turning into a type-erased generic registry. Only ever instantiated for
-    // TransformComponent/MeshComponent -- see the explicit specializations in World.cpp;
-    // adding a new component type means adding one more specialization there, same as
-    // adding one more Add/Get/Remove/Has group above.
+    // World turning into a type-erased generic registry. Only ever instantiated for the
+    // component types below -- see the explicit specializations in World.cpp; adding a
+    // new component type means adding one more specialization there, same as adding one
+    // more Add/Get/Remove/Has group above.
     template <typename T>
     T* GetComponent(Entity entity);
     template <typename T>
@@ -58,11 +75,13 @@ private:
 
     ComponentStorage<TransformComponent> m_transforms;
     ComponentStorage<MeshComponent> m_meshes;
+    ComponentStorage<RigidbodyComponent> m_rigidbodies;
+    ComponentStorage<ColliderComponent> m_colliders;
 };
 
 // Explicit specializations (defined in World.cpp) -- declared here so every translation
-// unit that includes this header resolves World::GetComponent<TransformComponent>/
-// <MeshComponent> to them instead of the (deliberately bodyless) primary template.
+// unit that includes this header resolves World::GetComponent<T>() for a known component
+// type to them instead of the (deliberately bodyless) primary template.
 template <>
 TransformComponent* World::GetComponent<TransformComponent>(Entity entity);
 template <>
@@ -71,5 +90,13 @@ template <>
 MeshComponent* World::GetComponent<MeshComponent>(Entity entity);
 template <>
 const MeshComponent* World::GetComponent<MeshComponent>(Entity entity) const;
+template <>
+RigidbodyComponent* World::GetComponent<RigidbodyComponent>(Entity entity);
+template <>
+const RigidbodyComponent* World::GetComponent<RigidbodyComponent>(Entity entity) const;
+template <>
+ColliderComponent* World::GetComponent<ColliderComponent>(Entity entity);
+template <>
+const ColliderComponent* World::GetComponent<ColliderComponent>(Entity entity) const;
 
 } // namespace engine::ecs

@@ -87,11 +87,43 @@ TEST_CASE("DestroyEntity removes its components too") {
     const Entity entity = world.CreateEntity();
     world.AddTransform(entity, {});
     world.AddMesh(entity, {});
+    world.AddRigidbody(entity, {});
+    world.AddCollider(entity, {});
     REQUIRE(world.HasTransform(entity));
     REQUIRE(world.HasMesh(entity));
+    REQUIRE(world.HasRigidbody(entity));
+    REQUIRE(world.HasCollider(entity));
 
     world.DestroyEntity(entity);
 
     CHECK_FALSE(world.HasTransform(entity));
     CHECK_FALSE(world.HasMesh(entity));
+    CHECK_FALSE(world.HasRigidbody(entity));
+    CHECK_FALSE(world.HasCollider(entity));
+}
+
+TEST_CASE("Add/Get/Has/Remove round-trip for RigidbodyComponent and ColliderComponent") {
+    World world;
+    const Entity entity = world.CreateEntity();
+
+    engine::ecs::RigidbodyComponent rigidbody;
+    rigidbody.bodyId = 42;
+    rigidbody.mass = 2.5f;
+    world.AddRigidbody(entity, rigidbody);
+    REQUIRE(world.HasRigidbody(entity));
+    CHECK(world.GetRigidbody(entity)->bodyId == 42);
+    CHECK(world.GetRigidbody(entity)->mass == doctest::Approx(2.5f));
+
+    engine::ecs::ColliderComponent collider;
+    collider.shapeType = engine::ecs::ColliderComponent::ShapeType::Sphere;
+    collider.radius = 1.5f;
+    world.AddCollider(entity, collider);
+    REQUIRE(world.HasCollider(entity));
+    CHECK(world.GetCollider(entity)->shapeType == engine::ecs::ColliderComponent::ShapeType::Sphere);
+    CHECK(world.GetCollider(entity)->radius == doctest::Approx(1.5f));
+
+    world.RemoveRigidbody(entity);
+    world.RemoveCollider(entity);
+    CHECK_FALSE(world.HasRigidbody(entity));
+    CHECK_FALSE(world.HasCollider(entity));
 }

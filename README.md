@@ -4,12 +4,14 @@ Open source 3D engine, optimized for **Raspberry Pi 4** (forward-compatible with
 targeting low-poly retro-style games as the primary use case. C++20, Vulkan 1.2 core.
 
 Full context and rationale: see [`CLAUDE.md`](CLAUDE.md) and the design documents in
-[`docs/`](docs/). Current status: **M0 — Hello Vulkan** through **M3 — Hello Script** are
+[`docs/`](docs/). Current status: **M0 — Hello Vulkan** through **M4 — Hello Physics** are
 all verified end to end on Linux desktop and **physical Pi4 hardware** — M2 populates a
 64-entity ECS scene and culls it in parallel via the Job System, rendering only what's
 inside the camera frustum through the real V3D (VideoCore) Vulkan driver; M3 adds a
 Unity-like Script System (`ScriptComponent`/`ComponentHandle<T>`/`REGISTER_SCRIPT`/
-`EXPOSE`) driving a cube via real WASD keyboard input (see [`samples/`](samples/)).
+`EXPOSE`) driving a cube via real WASD keyboard input; M4 adds Jolt Physics via an adapter
+that injects Jolt's own jobs into the engine's Job System instead of a second thread pool,
+with a fixed-timestep cube-falls-and-settles scene (see [`samples/`](samples/)).
 
 ## Prerequisites
 
@@ -75,7 +77,7 @@ plan is in [`docs/03-technical-analysis-claude-code.md`](docs/03-technical-analy
 | M1 | Hello Mesh | Verified on Linux desktop and physical Pi4 hardware |
 | M2 | Hello Scene | Verified on Linux desktop and physical Pi4 hardware |
 | M3 | Hello Script | Verified on Linux desktop and physical Pi4 hardware |
-| M4 | Hello Physics | Not started |
+| M4 | Hello Physics | Verified on Linux desktop and physical Pi4 hardware |
 | M5 | Vertical Slice (target) | Not started |
 
 Details: `CLAUDE.md` section 8, [`docs/02-mvp-roadmap-analysis.md`](docs/02-mvp-roadmap-analysis.md).

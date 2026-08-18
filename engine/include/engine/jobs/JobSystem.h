@@ -40,6 +40,15 @@ public:
     // API can grow out of this later if a milestone actually needs one.
     void ParallelFor(std::size_t itemCount, const std::function<void(std::size_t, std::size_t)>& fn);
 
+    // Submits a single, already-formed unit of work -- no [begin,end) chunking, no
+    // blocking until it's done. For adapters that bring in jobs with their own internal
+    // dependency tracking (physics/JoltJobSystemAdapter, M4: Jolt's own Job::Execute()
+    // handles dependencies, this just needs to run the callable on some worker) rather
+    // than the chunked-and-joined shape ParallelFor's callers need. Distributed
+    // round-robin across worker queues so a burst of single-job submissions still spreads
+    // out instead of piling onto one worker.
+    void Submit(std::function<void()> job);
+
     std::uint32_t GetWorkerCount() const { return static_cast<std::uint32_t>(m_workers.size()); }
 
 private:
@@ -62,6 +71,7 @@ private:
     std::condition_variable m_wakeCondition;
     std::atomic<bool> m_shuttingDown{false};
     std::atomic<std::uint32_t> m_pendingJobCount{0}; // wakes idle workers only when > 0
+    std::atomic<std::uint32_t> m_nextSubmitWorker{0}; // round-robin cursor for Submit()
 };
 
 } // namespace engine::jobs

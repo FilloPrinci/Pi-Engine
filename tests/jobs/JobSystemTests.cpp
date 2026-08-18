@@ -3,6 +3,8 @@
 #include <doctest/doctest.h>
 
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <vector>
 
 using engine::jobs::JobSystem;
@@ -71,5 +73,33 @@ TEST_CASE("GetWorkerCount reflects the requested worker count") {
     JobSystem jobSystem;
     REQUIRE(jobSystem.Init(3));
     CHECK(jobSystem.GetWorkerCount() == 3);
+    jobSystem.Shutdown();
+}
+
+TEST_CASE("Submit runs every submitted job exactly once") {
+    // Unlike ParallelFor, Submit() doesn't block the caller (physics/JoltJobSystemAdapter,
+    // M4, needs fire-and-forget: Jolt's own Job::Execute() tracks completion/dependencies)
+    // -- the test needs its own synchronization to know every job has actually run.
+    JobSystem jobSystem;
+    REQUIRE(jobSystem.Init(4));
+
+    constexpr int kJobCount = 500;
+    std::atomic<int> completed{0};
+    std::mutex doneMutex;
+    std::condition_variable doneCondition;
+
+    for (int i = 0; i < kJobCount; ++i) {
+        jobSystem.Submit([&completed, &doneMutex, &doneCondition]() {
+            if (completed.fetch_add(1, std::memory_order_acq_rel) + 1 == kJobCount) {
+                std::lock_guard<std::mutex> lock(doneMutex);
+                doneCondition.notify_all();
+            }
+        });
+    }
+
+    std::unique_lock<std::mutex> lock(doneMutex);
+    doneCondition.wait(lock, [&completed] { return completed.load() == kJobCount; });
+    CHECK(completed.load() == kJobCount);
+
     jobSystem.Shutdown();
 }

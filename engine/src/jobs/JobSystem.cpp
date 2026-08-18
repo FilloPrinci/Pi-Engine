@@ -80,6 +80,19 @@ void JobSystem::ParallelFor(std::size_t itemCount,
     doneCondition.wait(lock, [&remaining] { return remaining.load(std::memory_order_acquire) == 0; });
 }
 
+void JobSystem::Submit(std::function<void()> job) {
+    const std::uint32_t workerCount = GetWorkerCount();
+    if (workerCount == 0) {
+        // Not initialized: run inline rather than dropping it (mirrors ParallelFor's
+        // own not-initialized fallback).
+        job();
+        return;
+    }
+
+    const std::uint32_t index = m_nextSubmitWorker.fetch_add(1, std::memory_order_relaxed) % workerCount;
+    PushJob(index, std::move(job));
+}
+
 void JobSystem::WorkerLoop(std::uint32_t workerIndex) {
     while (!m_shuttingDown.load(std::memory_order_acquire)) {
         JobFunction job;

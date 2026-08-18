@@ -14,7 +14,7 @@ yet implemented (see [`samples/m0_hello_vulkan/`](samples/m0_hello_vulkan/)).
   dependencies are pinned in [`vcpkg.json`](vcpkg.json) (manifest mode, no manual install
   needed beyond that).
 - **Cross-compiling for Pi4/Pi5** from Linux x86_64 (the primary dev workflow, see
-  [`docs/02-analisi-mvp-roadmap.md`](docs/02-analisi-mvp-roadmap.md) section 3): an
+  [`docs/02-mvp-roadmap-analysis.md`](docs/02-mvp-roadmap-analysis.md) section 3): an
   `aarch64-linux-gnu` cross toolchain, e.g. on Debian/Ubuntu:
   ```
   sudo apt install g++-aarch64-linux-gnu gcc-aarch64-linux-gnu
@@ -41,7 +41,7 @@ cmake --build --preset pi4-debug
 
 See `CLAUDE.md` section 6. Every `engine/include/engine/<module>/` directory has its own
 `README.md` listing which milestone (M0-M5) populates it and with which files — the exact
-plan is in [`docs/03-analisi-tecnica-claude-code.md`](docs/03-analisi-tecnica-claude-code.md).
+plan is in [`docs/03-technical-analysis-claude-code.md`](docs/03-technical-analysis-claude-code.md).
 
 ## Roadmap
 
@@ -54,4 +54,4 @@ plan is in [`docs/03-analisi-tecnica-claude-code.md`](docs/03-analisi-tecnica-cl
 | M4 | Hello Physics | Not started |
 | M5 | Vertical Slice (target) | Not started |
 
-Details: `CLAUDE.md` section 8, [`docs/02-analisi-mvp-roadmap.md`](docs/02-analisi-mvp-roadmap.md).
+Details: `CLAUDE.md` section 8, [`docs/02-mvp-roadmap-analysis.md`](docs/02-mvp-roadmap-analysis.md).

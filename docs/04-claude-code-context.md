@@ -1,6 +1,6 @@
 # Project Context — Open Source 3D Engine for Raspberry Pi 4/5
 
-> This document condenses `docs/01-engine-design-rpi.md`, `docs/02-mvp-roadmap-analysis.md`, and `docs/03-technical-analysis-claude-code.md`. It is kept as a constant reference during development. For the "why" behind each choice, the three full documents in `docs/` remain the source of truth.
+> This document condenses `01-engine-design-rpi.md`, `02-mvp-roadmap-analysis.md`, and `03-technical-analysis-claude-code.md`. It is meant to be kept as a constant reference during development (can be used as `CLAUDE.md` at the repository root). For the "why" behind each choice, the three full documents remain the source of truth.
 
 ---
 
@@ -60,7 +60,7 @@ No script reads/writes physics data while the solver is working on it — guaran
 
 ## 5. Code conventions
 
-- **Language: ALWAYS English** — code, comments, logs, error messages, Editor text. No exceptions, including the design/analysis documents in `docs/` (originally written in Italian, translated to English on 2026-08-18).
+- **Language: ALWAYS English** — code, comments, logs, error messages, Editor text. No exceptions. (Only the design/analysis documents in `docs/` are in Italian — well, they used to be; see the note at the end of this file.)
 - Classes/types: `PascalCase`. Public methods: `PascalCase` (`OnUpdate`, `GetComponent`). Private members: `m_camelCase`. Files: `snake_case`.
 - Namespace: `engine::<module>` (`engine::rhi`, `engine::ecs`, `engine::jobs`, `engine::renderer`, `engine::script`, `engine::physics`, `engine::platform`).
 - **No C++ exceptions in hot-path code** (renderer, physics, job system) — return code/bool + out param, `ENGINE_ASSERT` macro. Exceptions allowed only in the Cooker/offline tooling.
@@ -72,10 +72,7 @@ No script reads/writes physics data while the solver is working on it — guaran
 ```
 Pi-Engine/
 ├── CMakeLists.txt / CMakePresets.json / vcpkg.json
-├── .clang-format / .clang-tidy / .gitignore
-├── cmake/
-│   ├── toolchains/aarch64-linux-gnu.cmake
-│   └── CompilerWarnings.cmake
+├── cmake/toolchains/aarch64-linux-gnu.cmake
 ├── engine/
 │   ├── include/engine/{core,platform,rhi,ecs,jobs,renderer,script,physics}/
 │   └── src/                    # same structure as include/
@@ -85,7 +82,7 @@ Pi-Engine/
 │   ├── m3_hello_script/  m4_hello_physics/  m5_vertical_slice/
 ├── assets/                     # raw, no Cooker in M0-M5
 ├── shaders/                    # GLSL → SPIR-V at build time
-└── docs/                       # design/analysis documents
+└── docs/                       # these documents
 ```
 
 ## 7. Pinned dependencies (vcpkg manifest)
@@ -122,8 +119,6 @@ Primary goal: **minimal vertical slice** — move a cube with the keyboard, jump
 
 **Explicitly out of scope for M0-M5** (already designed, but later): Audio, gamepad, LOD, bloom/post-processing, PBR profile, Prefab, full Asset Pipeline/Cooker, Editor, Networking.
 
-For the exact list of files/classes to create in each milestone: `docs/03-technical-analysis-claude-code.md` (sections 5-10).
-
 ## 9. Rules that must never be violated
 
 1. No script accesses physics data outside the phases defined in section 4 — the barrier is structural, not conventional.
@@ -137,6 +132,10 @@ For the exact list of files/classes to create in each milestone: `docs/03-techni
 
 ## 10. Further reading
 
-- **Why** behind every architectural choice (hardware, TBDR rendering, physics, audio, input, Editor/Script System, Asset Pipeline, Prefab): `docs/01-engine-design-rpi.md`
-- **Full roadmap** and what's excluded from the vertical slice: `docs/02-mvp-roadmap-analysis.md`
-- **Exact files/classes** to create for each milestone, dependency rationale: `docs/03-technical-analysis-claude-code.md`
+- **Why** behind every architectural choice (hardware, TBDR rendering, physics, audio, input, Editor/Script System, Asset Pipeline, Prefab): `01-engine-design-rpi.md`
+- **Full roadmap** and what's excluded from the vertical slice: `02-mvp-roadmap-analysis.md`
+- **Exact files/classes** to create for each milestone, dependency rationale: `03-technical-analysis-claude-code.md`
+
+---
+
+*Historical note: documents 01-04 were originally written in Italian and translated to English on 2026-08-18, at the project owner's request, to keep the whole repository — including its design documentation — consistently in English (rule 6 above). If you find an Italian phrase anywhere in this repo, it's a leftover to fix, not an intentional exception.*

@@ -88,6 +88,10 @@ bool RHIContext::Init(platform::IDisplayBackend& backend, const char* appName) {
     }
     volkLoadDevice(m_device);
 
+    if (!CreateAllocator()) {
+        return false;
+    }
+
     return true;
 }
 
@@ -270,7 +274,30 @@ bool RHIContext::CreateLogicalDevice() {
     return true;
 }
 
+bool RHIContext::CreateAllocator() {
+    // VMA_STATIC_VULKAN_FUNCTIONS=0 / VMA_DYNAMIC_VULKAN_FUNCTIONS=1 are set where
+    // VMA_IMPLEMENTATION is defined (src/rhi/VmaImplementation.cpp). With volk providing
+    // the loader, VMA only needs these two ProcAddr entry points -- it resolves every
+    // other Vulkan function it needs by itself.
+    VmaVulkanFunctions vulkanFunctions{};
+    vulkanFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
+    vulkanFunctions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+
+    VmaAllocatorCreateInfo allocatorInfo{};
+    allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_2;
+    allocatorInfo.physicalDevice = m_physicalDevice;
+    allocatorInfo.device = m_device;
+    allocatorInfo.instance = m_instance;
+    allocatorInfo.pVulkanFunctions = &vulkanFunctions;
+
+    return CheckVkResult(vmaCreateAllocator(&allocatorInfo, &m_allocator), "vmaCreateAllocator");
+}
+
 void RHIContext::Shutdown() {
+    if (m_allocator != VK_NULL_HANDLE) {
+        vmaDestroyAllocator(m_allocator);
+        m_allocator = VK_NULL_HANDLE;
+    }
     if (m_device != VK_NULL_HANDLE) {
         vkDestroyDevice(m_device, nullptr);
         m_device = VK_NULL_HANDLE;

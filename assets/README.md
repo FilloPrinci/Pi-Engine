@@ -3,7 +3,10 @@
 Raw source assets consumed directly at runtime through M0-M5 — no Cooker yet
 (docs/01 section 12, docs/02 section 3: deferred until after the vertical slice).
 
-- `m1_cube.glb` — arrives with M1 (docs/03 section 6), test mesh for MeshLoader.
+- `m1_cube.glb` — done (M1, docs/03 section 6): test mesh for MeshLoader. A hand-generated
+  unit cube (24 vertices/36 indices, position+normal, no shared vertices across faces so
+  each face keeps a flat normal), not exported from a DCC tool -- only a minimal known-good
+  triangle list was needed.
 
 Everything here stays git-friendly source (glTF/GLB, PNG/TGA, WAV) — no cooked/compressed
 binaries belong in this repo.

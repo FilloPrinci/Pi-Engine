@@ -4,6 +4,11 @@
 
 #include <volk.h>
 
+// vk_mem_alloc.h assumes it can call vk* functions unqualified; with volk providing them
+// as loaded function pointers (see RHIContext.cpp), that Just Works as long as volk.h is
+// included first, which the include order above already guarantees.
+#include <vk_mem_alloc.h>
+
 #include <cstdint>
 #include <optional>
 
@@ -35,6 +40,7 @@ public:
     VkQueue GetPresentQueue() const { return m_presentQueue; }
     std::uint32_t GetGraphicsQueueFamily() const { return m_graphicsQueueFamily; }
     std::uint32_t GetPresentQueueFamily() const { return m_presentQueueFamily; }
+    VmaAllocator GetAllocator() const { return m_allocator; }
 
 private:
     struct QueueFamilyIndices {
@@ -48,6 +54,7 @@ private:
     bool CreateDebugMessenger();
     bool SelectPhysicalDevice();
     bool CreateLogicalDevice();
+    bool CreateAllocator();
     QueueFamilyIndices FindQueueFamilies(VkPhysicalDevice device) const;
     bool IsDeviceSuitable(VkPhysicalDevice device) const;
 
@@ -60,6 +67,7 @@ private:
     VkQueue m_presentQueue = VK_NULL_HANDLE;
     std::uint32_t m_graphicsQueueFamily = 0;
     std::uint32_t m_presentQueueFamily = 0;
+    VmaAllocator m_allocator = VK_NULL_HANDLE;
 };
 
 } // namespace engine::rhi

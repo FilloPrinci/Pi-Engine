@@ -4,10 +4,9 @@ Open source 3D engine, optimized for **Raspberry Pi 4** (forward-compatible with
 targeting low-poly retro-style games as the primary use case. C++20, Vulkan 1.2 core.
 
 Full context and rationale: see [`CLAUDE.md`](CLAUDE.md) and the design documents in
-[`docs/`](docs/). Current status: milestone **M0 — Hello Vulkan** builds and runs on Linux
-desktop (verified end to end: instance/device/swapchain/pipeline all initialize, the frame
-loop runs without errors); physical Pi4 verification is still pending (see
-[`samples/m0_hello_vulkan/`](samples/m0_hello_vulkan/)).
+[`docs/`](docs/). Current status: milestone **M0 — Hello Vulkan** is verified end to end on
+both Linux desktop and **physical Pi4 hardware** — the colored triangle renders via the
+real V3D (VideoCore) Vulkan driver (see [`samples/m0_hello_vulkan/`](samples/m0_hello_vulkan/)).
 
 ## Prerequisites
 
@@ -50,6 +49,15 @@ cmake --preset pi4
 cmake --build --preset pi4-debug
 ```
 
+Building *directly on* a Pi4/Pi5 (native ARM, no cross toolchain) instead of cross-compiling:
+the `pi4`/`pi5` presets chainload `cmake/toolchains/aarch64-linux-gnu.cmake`, which hardcodes
+the cross-compiler names (`aarch64-linux-gnu-gcc`) — those binaries don't exist under that
+name on a native ARM system (there it's just `gcc`). Override the chainload to build natively:
+```
+cmake --preset pi4 -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=
+cmake --build build/pi4 --config Debug
+```
+
 ## Repository layout
 
 See `CLAUDE.md` section 6. Every `engine/include/engine/<module>/` directory has its own
@@ -60,7 +68,7 @@ plan is in [`docs/03-technical-analysis-claude-code.md`](docs/03-technical-analy
 
 | # | Milestone | Status |
 |---|---|---|
-| M0 | Hello Vulkan | Verified on Linux desktop, pending Pi4 hardware verification |
+| M0 | Hello Vulkan | Verified on Linux desktop and physical Pi4 hardware |
 | M1 | Hello Mesh | Not started |
 | M2 | Hello Scene | Not started |
 | M3 | Hello Script | Not started |

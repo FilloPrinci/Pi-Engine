@@ -108,7 +108,7 @@ Primary goal: **minimal vertical slice** — move a cube with the keyboard, jump
 
 | # | Milestone | Exit criterion | Status |
 |---|---|---|---|
-| M0 | Hello Vulkan — triangle on screen | RHI init, swapchain, pipeline compiles, runs on Pi4 | 🟨 Verified on Linux desktop, pending Pi4 hardware verification |
+| M0 | Hello Vulkan — triangle on screen | RHI init, swapchain, pipeline compiles, runs on Pi4 | ✅ Verified on Linux desktop and physical Pi4 hardware |
 | M1 | Hello Mesh — cube from glTF, orbit camera | Minimal glTF loader, unlit pipeline active | ⬜ |
 | M2 | Hello Scene — culling active | Minimal ECS (Transform+Mesh), Job System in real use | ⬜ |
 | M3 | Hello Script — object moves via keyboard | ScriptComponent/ComponentHandle/REGISTER_SCRIPT working | ⬜ |

@@ -70,12 +70,13 @@ VkFormat ChooseDepthFormat(VkPhysicalDevice physicalDevice) {
 // early has a Transform-only or physics-only entity.
 Entity SpawnBox(World& world, PhysicsWorld& physicsWorld, const glm::vec3& position,
                 const glm::vec3& scale, const glm::vec3& halfExtents, bool isStatic,
-                float mass = 1.0f) {
+                float mass = 1.0f, const glm::quat& rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f)) {
     const Entity entity = world.CreateEntity();
 
     TransformComponent transform;
     transform.position = position;
     transform.scale = scale;
+    transform.rotation = rotation;
     world.AddTransform(entity, transform);
 
     ColliderComponent collider;
@@ -166,11 +167,16 @@ int main(int /*argc*/, char** /*argv*/) {
                                     groundHalfExtents * 2.0f, groundHalfExtents, /*isStatic=*/true);
 
     // Falling cube: default half-extents (0.5) match the shared mesh 1:1, no scale needed.
-    // Starts 5 units above the ground's top surface -- comes to rest with its center at
-    // y=0.5 once settled (ground top at y=0 + the cube's own half-extent).
+    // Starts 5 units above the ground's top surface, tilted around an off-axis diagonal
+    // (not just a single world axis, so all three dimensions are visibly asymmetric as it
+    // tumbles) -- exercises the solver's rotational dynamics and restitution/friction on
+    // corner/edge impact, not just a flat face-first drop. Settles resting on a face once
+    // the angular velocity damps out, same as a flat drop, just with a tumble first.
+    const glm::quat fallingCubeRotation =
+        glm::angleAxis(glm::radians(35.0f), glm::normalize(glm::vec3(1.0f, 0.3f, 0.6f)));
     const Entity fallingCube =
         SpawnBox(world, physicsWorld, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(1.0f),
-                 glm::vec3(0.5f), /*isStatic=*/false);
+                 glm::vec3(0.5f), /*isStatic=*/false, /*mass=*/1.0f, fallingCubeRotation);
 
     const std::array<Entity, 2> renderableEntities{ground, fallingCube};
 

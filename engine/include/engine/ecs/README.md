@@ -11,7 +11,8 @@
 - `components/RigidbodyComponent.h`, `components/ColliderComponent.h` -- M4.
 
 Never a permanent raw pointer to a component — always `ComponentHandle<T>`
-(script/ComponentHandle.h, M3, CLAUDE.md rule 4). M2's systems (FrustumCuller) resolve
-components fresh via `World::Get*()` every call instead, since nothing holds a component
-reference across a frame boundary yet -- `ComponentHandle<T>` becomes necessary once
-scripts do that in M3.
+(script/ComponentHandle.h, done M3, CLAUDE.md rule 4). M2's systems (FrustumCuller) still
+resolve components fresh via `World::Get*()` every call, since nothing there holds a
+component reference across a frame boundary; scripts do, via `World::GetComponent<T>()`
+(the generic dispatch `ComponentHandle<T>` re-resolves through on every access -- see
+World.h's comment next to it).

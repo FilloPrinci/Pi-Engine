@@ -67,9 +67,28 @@ void SDL2DisplayBackend::PollEvents(InputState& out) {
         } else if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE) {
             m_shouldQuit = true;
         }
-        // Keyboard/mouse/gamepad translation arrives in M3 (platform/InputSystem).
+        // Mouse/gamepad translation is a later extension (docs/03 section 8) -- keyboard
+        // only for M3.
     }
     out.quitRequested = m_shouldQuit;
+
+    // SDL_GetKeyboardState() reflects the live keyboard state directly (no per-key event
+    // bookkeeping needed here) -- translated into our own backend-agnostic Key enum so
+    // gameplay code never sees an SDL scancode (docs/01 section 11).
+    const Uint8* keyboardState = SDL_GetKeyboardState(nullptr);
+    auto setKey = [&](Key key, SDL_Scancode scancode) {
+        out.keysHeld[static_cast<std::size_t>(key)] = keyboardState[scancode] != 0;
+    };
+    setKey(Key::W, SDL_SCANCODE_W);
+    setKey(Key::A, SDL_SCANCODE_A);
+    setKey(Key::S, SDL_SCANCODE_S);
+    setKey(Key::D, SDL_SCANCODE_D);
+    setKey(Key::Up, SDL_SCANCODE_UP);
+    setKey(Key::Down, SDL_SCANCODE_DOWN);
+    setKey(Key::Left, SDL_SCANCODE_LEFT);
+    setKey(Key::Right, SDL_SCANCODE_RIGHT);
+    setKey(Key::Space, SDL_SCANCODE_SPACE);
+    setKey(Key::Escape, SDL_SCANCODE_ESCAPE);
 }
 
 core::Extent2D SDL2DisplayBackend::GetDrawableSize() {

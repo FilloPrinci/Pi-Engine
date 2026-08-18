@@ -19,7 +19,7 @@ void Application::Run(platform::IDisplayBackend& displayBackend, const Callbacks
         lastFrameTime = now;
 
         if (callbacks.onUpdate) {
-            callbacks.onUpdate(deltaSeconds);
+            callbacks.onUpdate(deltaSeconds, input);
         }
         if (callbacks.onRender) {
             callbacks.onRender();

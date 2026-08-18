@@ -52,4 +52,21 @@ MeshComponent* World::GetMesh(Entity entity) { return m_meshes.Get(entity); }
 const MeshComponent* World::GetMesh(Entity entity) const { return m_meshes.Get(entity); }
 bool World::HasMesh(Entity entity) const { return m_meshes.Has(entity); }
 
+template <>
+TransformComponent* World::GetComponent<TransformComponent>(Entity entity) {
+    return GetTransform(entity);
+}
+template <>
+const TransformComponent* World::GetComponent<TransformComponent>(Entity entity) const {
+    return GetTransform(entity);
+}
+template <>
+MeshComponent* World::GetComponent<MeshComponent>(Entity entity) {
+    return GetMesh(entity);
+}
+template <>
+const MeshComponent* World::GetComponent<MeshComponent>(Entity entity) const {
+    return GetMesh(entity);
+}
+
 } // namespace engine::ecs

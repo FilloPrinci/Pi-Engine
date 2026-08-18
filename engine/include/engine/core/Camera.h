@@ -4,9 +4,10 @@
 
 namespace engine::core {
 
-// Minimal orbit camera (docs/03 section 6). No input handling yet (InputSystem arrives
-// in M3) -- samples drive `yaw`/`pitch` directly, e.g. incrementing yaw each frame for an
-// automatic orbit demo.
+// Minimal orbit camera (docs/03 section 6). No input handling of its own -- samples drive
+// `yaw`/`pitch` directly, e.g. incrementing yaw each frame for an automatic orbit demo
+// (M2), or leaving it static so a script-driven object's movement reads clearly (M3).
+// Free-look via InputSystem is a later extension, not needed for any M0-M5 exit criterion.
 class Camera {
 public:
     glm::mat4 GetViewMatrix() const;

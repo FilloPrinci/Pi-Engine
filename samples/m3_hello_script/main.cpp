@@ -2,14 +2,17 @@
 #include "engine/core/Camera.h"
 #include "engine/core/EngineVersion.h"
 #include "engine/ecs/World.h"
-#include "engine/jobs/JobSystem.h"
+#include "engine/platform/InputSystem.h"
 #include "engine/platform/SDL2DisplayBackend.h"
 #include "engine/renderer/ForwardLitPipeline.h"
-#include "engine/renderer/FrustumCuller.h"
 #include "engine/renderer/MeshLoader.h"
 #include "engine/rhi/RHIBuffer.h"
 #include "engine/rhi/RHIContext.h"
 #include "engine/rhi/RHISwapchain.h"
+#include "engine/script/ScriptComponent.h"
+#include "engine/script/ScriptRegistry.h"
+
+#include "scripts/MoveScript.h"
 
 #include <volk.h>
 
@@ -18,30 +21,28 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <string>
 #include <vector>
 
 using engine::core::Application;
 using engine::core::Camera;
 using engine::ecs::Entity;
-using engine::ecs::MeshComponent;
 using engine::ecs::TransformComponent;
 using engine::ecs::World;
-using engine::jobs::JobSystem;
+using engine::platform::InputSystem;
 using engine::platform::SDL2DisplayBackend;
 using engine::renderer::ForwardLitPipeline;
-using engine::renderer::FrustumCuller;
 using engine::renderer::MeshData;
 using engine::rhi::RHIBuffer;
 using engine::rhi::RHIContext;
 using engine::rhi::RHISwapchain;
+using engine::script::ScriptComponent;
+using engine::script::ScriptRegistry;
 
 namespace {
 
 constexpr int kMaxFramesInFlight = 2;
-
-// Unit cube (assets/m1_cube.glb, -0.5..0.5 per axis): circumscribed-sphere radius.
-constexpr float kCubeBoundsRadius = 0.8660254f; // sqrt(0.5*0.5*3)
 
 std::string ShaderPath(const char* fileName) {
     return std::string(PI_ENGINE_SHADER_DIR) + "/" + fileName;
@@ -64,41 +65,16 @@ VkFormat ChooseDepthFormat(VkPhysicalDevice physicalDevice) {
     return VK_FORMAT_UNDEFINED;
 }
 
-// Populates `world` with a grid of cube entities (docs/03 section 7: "a handful of
-// objects"), spread wide enough that the orbiting camera's frustum only ever covers part
-// of it -- FrustumCuller has something real to cull.
-void PopulateScene(World& world, int gridSize, float spacing) {
-    const float half = static_cast<float>(gridSize - 1) * spacing * 0.5f;
-    for (int x = 0; x < gridSize; ++x) {
-        for (int z = 0; z < gridSize; ++z) {
-            const Entity entity = world.CreateEntity();
-
-            TransformComponent transform;
-            transform.position =
-                glm::vec3(static_cast<float>(x) * spacing - half, 0.0f,
-                          static_cast<float>(z) * spacing - half);
-            world.AddTransform(entity, transform);
-
-            MeshComponent mesh;
-            mesh.boundsRadius = kCubeBoundsRadius;
-            world.AddMesh(entity, mesh);
-        }
-    }
-}
-
 } // namespace
 
-// Milestone M2 -- Hello Scene (docs/02 section 4, docs/03 section 7).
-// Exit criterion: a handful of objects in the scene, frustum culling active; minimal ECS
-// (Transform + Mesh) working; first real use of the Job System (parallel culling).
-//
-// First sample to use core::Application for its frame loop (docs/03 section 7: "every
-// milestone from here adds a phase to its loop") instead of a raw while(true) like
-// M0/M1 -- Poll Input is now Application's job, this sample only supplies onUpdate
-// (camera orbit + frustum cull) and onRender (the same per-frame Vulkan submission
-// pattern as M1, now looping over every *visible* entity instead of one hardcoded cube).
+// Milestone M3 -- Hello Script (docs/02 section 4, docs/03 section 8).
+// Exit criterion: an object moves via keyboard, ScriptComponent/ComponentHandle/
+// REGISTER_SCRIPT working. Single cube (no grid/culling -- that's M2's exit criterion,
+// already verified), a static camera so WASD movement is easy to see on screen, one
+// MoveScript instance created *through the ScriptRegistry factory* (not `new MoveScript`
+// directly) so REGISTER_SCRIPT is actually exercised, not just compiled.
 int main(int /*argc*/, char** /*argv*/) {
-    std::printf("Pi-Engine %s -- m2_hello_scene\n", engine::core::GetEngineVersionString());
+    std::printf("Pi-Engine %s -- m3_hello_script\n", engine::core::GetEngineVersionString());
 
     SDL2DisplayBackend displayBackend;
     if (!displayBackend.Init()) {
@@ -106,7 +82,7 @@ int main(int /*argc*/, char** /*argv*/) {
     }
 
     RHIContext context;
-    if (!context.Init(displayBackend, "m2_hello_scene")) {
+    if (!context.Init(displayBackend, "m3_hello_script")) {
         return EXIT_FAILURE;
     }
 
@@ -117,7 +93,7 @@ int main(int /*argc*/, char** /*argv*/) {
 
     VkDevice device = context.GetDevice();
 
-    // --- Mesh: same shared cube as M1, instanced across every entity in the scene. ---
+    // --- Mesh: same shared cube as M1/M2. ---
     MeshData mesh;
     if (!engine::renderer::LoadMesh(AssetPath("m1_cube.glb").c_str(), mesh)) {
         return EXIT_FAILURE;
@@ -135,24 +111,26 @@ int main(int /*argc*/, char** /*argv*/) {
         return EXIT_FAILURE;
     }
 
-    // --- Scene: ECS world + Job System (docs/03 section 7). ---
+    // --- Scene: one entity, moved entirely by its script. ---
     World world;
-    PopulateScene(world, /*gridSize=*/8, /*spacing=*/3.0f);
-    const std::size_t entityCount = world.Meshes().Size();
-    std::printf("m2_hello_scene: populated %zu entities\n", entityCount);
+    const Entity cube = world.CreateEntity();
+    world.AddTransform(cube, TransformComponent{});
 
-    JobSystem jobSystem;
-    if (!jobSystem.Init()) {
-        std::fprintf(stderr, "m2_hello_scene: JobSystem::Init failed\n");
+    InputSystem inputSystem;
+
+    std::unique_ptr<ScriptComponent> moveScript = ScriptRegistry::Create("MoveScript");
+    if (moveScript == nullptr) {
+        std::fprintf(stderr, "m3_hello_script: ScriptRegistry::Create(\"MoveScript\") failed -- "
+                              "was REGISTER_SCRIPT(MoveScript) linked in?\n");
         return EXIT_FAILURE;
     }
-    std::printf("m2_hello_scene: JobSystem started with %u worker thread(s)\n",
-                jobSystem.GetWorkerCount());
+    moveScript->Attach(world, cube, inputSystem);
+    moveScript->OnStart();
 
-    // --- Depth buffer (same pattern as M1). ---
+    // --- Depth buffer (same pattern as M1/M2). ---
     const VkFormat depthFormat = ChooseDepthFormat(context.GetPhysicalDevice());
     if (depthFormat == VK_FORMAT_UNDEFINED) {
-        std::fprintf(stderr, "m2_hello_scene: no supported depth/stencil format found\n");
+        std::fprintf(stderr, "m3_hello_script: no supported depth/stencil format found\n");
         return EXIT_FAILURE;
     }
 
@@ -179,7 +157,7 @@ int main(int /*argc*/, char** /*argv*/) {
 
         if (vmaCreateImage(context.GetAllocator(), &imageInfo, &allocInfo, &depthImage,
                             &depthAllocation, nullptr) != VK_SUCCESS) {
-            std::fprintf(stderr, "m2_hello_scene: vmaCreateImage (depth) failed\n");
+            std::fprintf(stderr, "m3_hello_script: vmaCreateImage (depth) failed\n");
             return false;
         }
 
@@ -193,7 +171,7 @@ int main(int /*argc*/, char** /*argv*/) {
         viewInfo.subresourceRange.layerCount = 1;
 
         if (vkCreateImageView(device, &viewInfo, nullptr, &depthView) != VK_SUCCESS) {
-            std::fprintf(stderr, "m2_hello_scene: vkCreateImageView (depth) failed\n");
+            std::fprintf(stderr, "m3_hello_script: vkCreateImageView (depth) failed\n");
             return false;
         }
         return true;
@@ -215,7 +193,7 @@ int main(int /*argc*/, char** /*argv*/) {
         return EXIT_FAILURE;
     }
 
-    // --- Render pass: color + depth (same as M1). ---
+    // --- Render pass: color + depth (same as M1/M2). ---
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = swapchain.GetImageFormat();
     colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -274,7 +252,7 @@ int main(int /*argc*/, char** /*argv*/) {
 
     VkRenderPass renderPass = VK_NULL_HANDLE;
     if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) {
-        std::fprintf(stderr, "m2_hello_scene: vkCreateRenderPass failed\n");
+        std::fprintf(stderr, "m3_hello_script: vkCreateRenderPass failed\n");
         return EXIT_FAILURE;
     }
 
@@ -301,7 +279,8 @@ int main(int /*argc*/, char** /*argv*/) {
 
             if (vkCreateFramebuffer(device, &framebufferInfo, nullptr, &framebuffers[i]) !=
                 VK_SUCCESS) {
-                std::fprintf(stderr, "m2_hello_scene: vkCreateFramebuffer failed for image %zu\n", i);
+                std::fprintf(stderr, "m3_hello_script: vkCreateFramebuffer failed for image %zu\n",
+                              i);
                 return false;
             }
         }
@@ -318,7 +297,7 @@ int main(int /*argc*/, char** /*argv*/) {
 
     VkCommandPool commandPool = VK_NULL_HANDLE;
     if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
-        std::fprintf(stderr, "m2_hello_scene: vkCreateCommandPool failed\n");
+        std::fprintf(stderr, "m3_hello_script: vkCreateCommandPool failed\n");
         return EXIT_FAILURE;
     }
 
@@ -329,7 +308,7 @@ int main(int /*argc*/, char** /*argv*/) {
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     allocInfo.commandBufferCount = kMaxFramesInFlight;
     if (vkAllocateCommandBuffers(device, &allocInfo, commandBuffers) != VK_SUCCESS) {
-        std::fprintf(stderr, "m2_hello_scene: vkAllocateCommandBuffers failed\n");
+        std::fprintf(stderr, "m3_hello_script: vkAllocateCommandBuffers failed\n");
         return EXIT_FAILURE;
     }
 
@@ -347,16 +326,18 @@ int main(int /*argc*/, char** /*argv*/) {
         if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailable[i]) != VK_SUCCESS ||
             vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinished[i]) != VK_SUCCESS ||
             vkCreateFence(device, &fenceInfo, nullptr, &inFlight[i]) != VK_SUCCESS) {
-            std::fprintf(stderr, "m2_hello_scene: failed to create sync objects for frame %d\n", i);
+            std::fprintf(stderr, "m3_hello_script: failed to create sync objects for frame %d\n", i);
             return EXIT_FAILURE;
         }
     }
 
     // --- Per-frame state shared between Application's onUpdate and onRender callbacks. ---
+    // Static, elevated 3/4 view (no auto-orbit like M2) -- keeps the cube and its
+    // keyboard-driven movement clearly visible instead of chasing a moving camera.
     Camera camera;
-    camera.distance = 16.0f;
+    camera.distance = 8.0f;
+    camera.pitch = 0.6f;
     glm::mat4 currentViewProj(1.0f);
-    std::size_t visibleCount = 0;
     int currentFrame = 0;
 
     std::uint32_t framesSinceReport = 0;
@@ -364,25 +345,17 @@ int main(int /*argc*/, char** /*argv*/) {
 
     Application::Callbacks callbacks;
 
-    callbacks.onUpdate = [&](float deltaSeconds, const engine::platform::InputState& /*input*/) {
-        // M2 predates InputSystem (M3): the camera orbits on its own, sweeping the
-        // frustum across the grid so the visible count actually changes over time.
-        constexpr float kOrbitRadiansPerSecond = 0.4f;
-        camera.yaw += kOrbitRadiansPerSecond * deltaSeconds;
+    callbacks.onUpdate = [&](float deltaSeconds, const engine::platform::InputState& input) {
+        // Poll Input -> Script phase (CLAUDE.md section 4): the frame's InputState is
+        // already polled by Application before onUpdate runs; InputSystem turns it into
+        // the held/pressed-this-frame queries scripts use, then every active script's
+        // OnUpdate runs against that single, consistent snapshot.
+        inputSystem.Update(input);
+        moveScript->OnUpdate(deltaSeconds);
 
         const float aspect = static_cast<float>(swapchain.GetExtent().width) /
                               static_cast<float>(swapchain.GetExtent().height);
         currentViewProj = camera.GetProjectionMatrix(aspect) * camera.GetViewMatrix();
-
-        const auto frustumPlanes = FrustumCuller::ExtractFrustumPlanes(currentViewProj);
-        FrustumCuller::Cull(world, jobSystem, frustumPlanes);
-
-        visibleCount = 0;
-        for (const MeshComponent& meshComponent : world.Meshes().Data()) {
-            if (meshComponent.visible) {
-                ++visibleCount;
-            }
-        }
     };
 
     callbacks.onRender = [&]() {
@@ -404,7 +377,7 @@ int main(int /*argc*/, char** /*argv*/) {
             return;
         }
         if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR) {
-            std::fprintf(stderr, "m2_hello_scene: vkAcquireNextImageKHR failed\n");
+            std::fprintf(stderr, "m3_hello_script: vkAcquireNextImageKHR failed\n");
             return;
         }
 
@@ -438,16 +411,8 @@ int main(int /*argc*/, char** /*argv*/) {
         vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
         vkCmdBindIndexBuffer(cmd, indexBuffer.GetHandle(), 0, VK_INDEX_TYPE_UINT32);
 
-        const auto& meshes = world.Meshes().Data();
-        const auto& meshEntities = world.Meshes().Entities();
-        for (std::size_t i = 0; i < meshes.size(); ++i) {
-            if (!meshes[i].visible) {
-                continue;
-            }
-            const TransformComponent* transform = world.GetTransform(meshEntities[i]);
-            if (transform == nullptr) {
-                continue;
-            }
+        const TransformComponent* transform = world.GetTransform(cube);
+        if (transform != nullptr) {
             const glm::mat4 mvp = currentViewProj * transform->GetMatrix();
             pipeline.PushModelViewProjection(cmd, mvp);
             vkCmdDrawIndexed(cmd, static_cast<std::uint32_t>(mesh.indices.size()), 1, 0, 0, 0);
@@ -472,7 +437,7 @@ int main(int /*argc*/, char** /*argv*/) {
 
         if (vkQueueSubmit(context.GetGraphicsQueue(), 1, &submitInfo, inFlight[currentFrame]) !=
             VK_SUCCESS) {
-            std::fprintf(stderr, "m2_hello_scene: vkQueueSubmit failed\n");
+            std::fprintf(stderr, "m3_hello_script: vkQueueSubmit failed\n");
             return;
         }
 
@@ -496,35 +461,35 @@ int main(int /*argc*/, char** /*argv*/) {
             createDepthResources(swapchain.GetExtent());
             createFramebuffers();
         } else if (presentResult != VK_SUCCESS) {
-            std::fprintf(stderr, "m2_hello_scene: vkQueuePresentKHR failed\n");
+            std::fprintf(stderr, "m3_hello_script: vkQueuePresentKHR failed\n");
             return;
         }
 
         currentFrame = (currentFrame + 1) % kMaxFramesInFlight;
 
-        // FPS + visible-entity counter in the window title -- same stopgap as M0/M1 ahead
-        // of the real Dear ImGui debug overlay (docs/01 section 4, module 4, useful "from
-        // M2" per that section -- deferred here since M2's exit criterion doesn't need it
-        // and it's a substantial addition of its own).
+        // FPS in the window title -- same stopgap as M0-M2 ahead of the real Dear ImGui
+        // debug overlay (docs/01 section 4, module 4).
         ++framesSinceReport;
         const auto now = std::chrono::steady_clock::now();
         const std::chrono::duration<double> elapsed = now - lastFpsReportTime;
         if (elapsed.count() >= 0.5) {
             const double fps = static_cast<double>(framesSinceReport) / elapsed.count();
             char title[96];
-            std::snprintf(title, sizeof(title), "Pi-Engine -- m2_hello_scene (%.0f FPS, %zu/%zu visible)",
-                          fps, visibleCount, entityCount);
+            std::snprintf(title, sizeof(title), "Pi-Engine -- m3_hello_script (%.0f FPS) -- WASD to move",
+                          fps);
             displayBackend.SetWindowTitle(title);
             framesSinceReport = 0;
             lastFpsReportTime = now;
         }
     };
 
-    std::printf("m2_hello_scene: running, close the window to exit.\n");
+    std::printf("m3_hello_script: running, WASD to move the cube, close the window to exit.\n");
     Application application;
     application.Run(displayBackend, callbacks);
 
     vkDeviceWaitIdle(device);
+
+    moveScript->OnDestroy();
 
     for (int i = 0; i < kMaxFramesInFlight; ++i) {
         vkDestroySemaphore(device, imageAvailable[i], nullptr);
@@ -539,13 +504,12 @@ int main(int /*argc*/, char** /*argv*/) {
     destroyDepthResources();
     vkDestroyRenderPass(device, renderPass, nullptr);
 
-    jobSystem.Shutdown();
     indexBuffer.Shutdown();
     vertexBuffer.Shutdown();
     swapchain.Shutdown();
     context.Shutdown();
     displayBackend.Shutdown();
 
-    std::printf("m2_hello_scene: clean exit.\n");
+    std::printf("m3_hello_script: clean exit.\n");
     return EXIT_SUCCESS;
 }

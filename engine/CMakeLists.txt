@@ -5,6 +5,7 @@ add_library(engine_core STATIC
     src/ecs/World.cpp
     src/ecs/components/TransformComponent.cpp
     src/jobs/JobSystem.cpp
+    src/platform/InputSystem.cpp
     src/platform/SDL2DisplayBackend.cpp
     src/renderer/ForwardLitPipeline.cpp
     src/renderer/FrustumCuller.cpp
@@ -14,6 +15,7 @@ add_library(engine_core STATIC
     src/rhi/RHIPipeline.cpp
     src/rhi/RHISwapchain.cpp
     src/rhi/VmaImplementation.cpp
+    src/script/ScriptRegistry.cpp
 )
 
 target_include_directories(engine_core

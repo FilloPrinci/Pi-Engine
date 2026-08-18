@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <limits>
 
 namespace engine::rhi {
@@ -23,8 +25,37 @@ VkSurfaceFormatKHR ChooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& av
 
 VkPresentModeKHR ChoosePresentMode(const std::vector<VkPresentModeKHR>& available) {
     // FIFO is the only mode guaranteed by the spec -- safe baseline for Pi4 (docs/01
-    // section 2.3: bandwidth is scarce, MAILBOX would burn extra frames for no benefit
-    // on a display-locked low-poly game).
+    // section 2.3: bandwidth is scarce, MAILBOX/IMMEDIATE would burn extra GPU cycles for
+    // no benefit on a display-locked low-poly game). Never the shipped default -- but
+    // useful as a one-off profiling toggle to see uncapped throughput/headroom on real
+    // hardware, so it is exposed as an env var rather than hardcoded per-sample:
+    //   PI_ENGINE_PRESENT_MODE=immediate|mailbox|fifo
+    if (const char* override = std::getenv("PI_ENGINE_PRESENT_MODE")) {
+        VkPresentModeKHR requested = VK_PRESENT_MODE_FIFO_KHR;
+        bool recognized = true;
+        if (std::strcmp(override, "immediate") == 0) {
+            requested = VK_PRESENT_MODE_IMMEDIATE_KHR;
+        } else if (std::strcmp(override, "mailbox") == 0) {
+            requested = VK_PRESENT_MODE_MAILBOX_KHR;
+        } else if (std::strcmp(override, "fifo") != 0) {
+            recognized = false;
+        }
+
+        if (!recognized) {
+            std::fprintf(stderr,
+                         "RHISwapchain: unrecognized PI_ENGINE_PRESENT_MODE=\"%s\" (expected "
+                         "fifo|immediate|mailbox), ignoring\n",
+                         override);
+        } else if (std::find(available.begin(), available.end(), requested) != available.end()) {
+            return requested;
+        } else {
+            std::fprintf(stderr,
+                         "RHISwapchain: PI_ENGINE_PRESENT_MODE=\"%s\" not supported by this "
+                         "device/surface, falling back to FIFO\n",
+                         override);
+        }
+    }
+
     for (VkPresentModeKHR mode : available) {
         if (mode == VK_PRESENT_MODE_FIFO_KHR) {
             return mode;

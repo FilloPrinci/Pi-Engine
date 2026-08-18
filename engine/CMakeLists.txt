@@ -1,8 +1,13 @@
 add_library(engine_core STATIC
+    src/core/Application.cpp
     src/core/Camera.cpp
     src/core/EngineVersion.cpp
+    src/ecs/World.cpp
+    src/ecs/components/TransformComponent.cpp
+    src/jobs/JobSystem.cpp
     src/platform/SDL2DisplayBackend.cpp
     src/renderer/ForwardLitPipeline.cpp
+    src/renderer/FrustumCuller.cpp
     src/renderer/MeshLoader.cpp
     src/rhi/RHIBuffer.cpp
     src/rhi/RHIContext.cpp
@@ -49,12 +54,14 @@ find_package(VulkanMemoryAllocator CONFIG REQUIRED)     # rhi/RHIBuffer (M1, doc
 # links and compiles fine.
 find_package(SDL2 CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)                       # core/Camera (M1, docs/03 section 6)
+find_package(Threads REQUIRED)                          # jobs/JobSystem (M2, docs/01 section 9.3)
 
 target_link_libraries(engine_core
     PUBLIC
         volk::volk
         GPUOpen::VulkanMemoryAllocator
         glm::glm
+        Threads::Threads
         # PUBLIC: SDL2DisplayBackend.h is part of engine_core's public API, so anything
         # linking engine_core (the samples) needs SDL2's headers/libs transitively too.
         $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>

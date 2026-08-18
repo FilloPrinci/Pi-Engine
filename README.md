@@ -4,10 +4,11 @@ Open source 3D engine, optimized for **Raspberry Pi 4** (forward-compatible with
 targeting low-poly retro-style games as the primary use case. C++20, Vulkan 1.2 core.
 
 Full context and rationale: see [`CLAUDE.md`](CLAUDE.md) and the design documents in
-[`docs/`](docs/). Current status: milestones **M0 — Hello Vulkan** and **M1 — Hello Mesh**
-are both verified end to end on Linux desktop and **physical Pi4 hardware** — M1 loads a
-cube from glTF and renders it with an orbiting camera via the real V3D (VideoCore) Vulkan
-driver (see [`samples/`](samples/)).
+[`docs/`](docs/). Current status: **M0 — Hello Vulkan** through **M2 — Hello Scene** are
+all verified end to end on Linux desktop and **physical Pi4 hardware** — M2 populates a
+64-entity ECS scene and culls it in parallel via the Job System, rendering only what's
+inside the camera frustum through the real V3D (VideoCore) Vulkan driver (see
+[`samples/`](samples/)).
 
 ## Prerequisites
 
@@ -71,7 +72,7 @@ plan is in [`docs/03-technical-analysis-claude-code.md`](docs/03-technical-analy
 |---|---|---|
 | M0 | Hello Vulkan | Verified on Linux desktop and physical Pi4 hardware |
 | M1 | Hello Mesh | Verified on Linux desktop and physical Pi4 hardware |
-| M2 | Hello Scene | Not started |
+| M2 | Hello Scene | Verified on Linux desktop and physical Pi4 hardware |
 | M3 | Hello Script | Not started |
 | M4 | Hello Physics | Not started |
 | M5 | Vertical Slice (target) | Not started |

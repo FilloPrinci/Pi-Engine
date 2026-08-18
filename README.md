@@ -4,15 +4,28 @@ Open source 3D engine, optimized for **Raspberry Pi 4** (forward-compatible with
 targeting low-poly retro-style games as the primary use case. C++20, Vulkan 1.2 core.
 
 Full context and rationale: see [`CLAUDE.md`](CLAUDE.md) and the design documents in
-[`docs/`](docs/). Current status: scaffold in place, milestone **M0 — Hello Vulkan** not
-yet implemented (see [`samples/m0_hello_vulkan/`](samples/m0_hello_vulkan/)).
+[`docs/`](docs/). Current status: milestone **M0 — Hello Vulkan** builds and runs on Linux
+desktop (verified end to end: instance/device/swapchain/pipeline all initialize, the frame
+loop runs without errors); physical Pi4 verification is still pending (see
+[`samples/m0_hello_vulkan/`](samples/m0_hello_vulkan/)).
 
 ## Prerequisites
 
 - CMake ≥ 3.24, Ninja (Linux/macOS) or Visual Studio 2022 (Windows).
 - [vcpkg](https://github.com/microsoft/vcpkg), with `VCPKG_ROOT` set in your environment —
   dependencies are pinned in [`vcpkg.json`](vcpkg.json) (manifest mode, no manual install
-  needed beyond that).
+  needed beyond that) *except* the autotools below, which vcpkg itself cannot provide.
+- **Linux only**: `autoconf`, `automake`, `libtool`, `autoconf-archive` — SDL2 pulls in
+  `libxcrypt` on Linux, and vcpkg builds it from source via autotools instead of CMake.
+  ```
+  sudo apt install autoconf autoconf-archive automake libtool   # Debian/Ubuntu
+  sudo dnf install autoconf autoconf-archive automake libtool   # Fedora
+  ```
+- [Vulkan SDK](https://vulkan.lunarg.com/) — provides `glslc`, used to compile
+  `shaders/*.vert`/`*.frag` to SPIR-V at build time (see `shaders/README.md`), and is the
+  usual source of the Vulkan validation layers used in debug builds. Needs to be on `PATH`
+  or discoverable via the `VULKAN_SDK` environment variable (the SDK's own `setup-env.sh`
+  does both).
 - **Cross-compiling for Pi4/Pi5** from Linux x86_64 (the primary dev workflow, see
   [`docs/02-mvp-roadmap-analysis.md`](docs/02-mvp-roadmap-analysis.md) section 3): an
   `aarch64-linux-gnu` cross toolchain, e.g. on Debian/Ubuntu:
@@ -47,7 +60,7 @@ plan is in [`docs/03-technical-analysis-claude-code.md`](docs/03-technical-analy
 
 | # | Milestone | Status |
 |---|---|---|
-| M0 | Hello Vulkan | Scaffold ready, not implemented |
+| M0 | Hello Vulkan | Verified on Linux desktop, pending Pi4 hardware verification |
 | M1 | Hello Mesh | Not started |
 | M2 | Hello Scene | Not started |
 | M3 | Hello Script | Not started |

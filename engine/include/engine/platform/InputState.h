@@ -2,10 +2,11 @@
 
 namespace engine::platform {
 
-// Placeholder — the real key/mouse/gamepad state lands in M3 (docs/03, section 8:
-// "InputState.h, InputSystem.h — solo tastiera in M3"). Kept as an (currently empty)
-// struct rather than a forward declaration so IDisplayBackend::PollEvents() has a
-// concrete, extensible type to write into from M0 onward.
-struct InputState {};
+// Fleshed out in M3 (docs/03, section 8: "InputState.h, InputSystem.h -- keyboard only in
+// M3"). For now it only carries what M0's present loop needs: whether the backend has
+// observed a request to quit (SDL_QUIT, window close button, Alt+F4, ...).
+struct InputState {
+    bool quitRequested = false;
+};
 
 } // namespace engine::platform

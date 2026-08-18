@@ -1,5 +1,8 @@
 add_library(engine_core STATIC
     src/core/EngineVersion.cpp
+    src/platform/SDL2DisplayBackend.cpp
+    src/rhi/RHIContext.cpp
+    src/rhi/RHISwapchain.cpp
 )
 
 target_include_directories(engine_core
@@ -16,7 +19,11 @@ pi_engine_set_warnings(engine_core)
 
 find_package(volk CONFIG REQUIRED)                     # M0 — rhi/RHIContext (docs/03 section 5)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)     # M1 — rhi/RHIBuffer (docs/03 section 6)
-find_package(SDL2 CONFIG REQUIRED)                      # M0 — platform/SDL2DisplayBackend
+# M0 — platform/SDL2DisplayBackend. The "vulkan" feature (see vcpkg.json) matters: vcpkg's
+# sdl2 port builds with SDL_VULKAN=OFF by default, which makes SDL_Vulkan_CreateSurface()
+# fail at runtime with "Vulkan support is not configured in SDL" even though everything
+# links and compiles fine.
+find_package(SDL2 CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)                       # M1 — core/Camera (docs/03 section 6)
 
 target_link_libraries(engine_core
@@ -24,7 +31,8 @@ target_link_libraries(engine_core
         volk::volk
         GPUOpen::VulkanMemoryAllocator
         glm::glm
-    PRIVATE
+        # PUBLIC: SDL2DisplayBackend.h is part of engine_core's public API, so anything
+        # linking engine_core (the samples) needs SDL2's headers/libs transitively too.
         $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
 )
 

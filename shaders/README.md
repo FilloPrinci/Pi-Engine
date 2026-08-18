@@ -1,10 +1,11 @@
 # shaders
 
-GLSL sources, compiled to SPIR-V at build time (custom CMake step, not the Cooker yet —
-docs/03 section 5). `*.spv` output is gitignored.
+GLSL sources, compiled to SPIR-V at build time by a custom CMake step (not the Cooker yet
+-- docs/03 section 5). Requires `glslc` (from the Vulkan SDK) on `PATH` or discoverable via
+the `VULKAN_SDK` environment variable; see the root `README.md` prerequisites.
 
-- `m0_triangle.vert` / `m0_triangle.frag` — arrive with M0, first minimal pipeline
-  (inline data, no external mesh asset).
+- `m0_triangle.vert` / `m0_triangle.frag` -- M0's first minimal pipeline: 3 hardcoded
+  positions/colors indexed by `gl_VertexIndex`, no vertex buffer, no external mesh asset.
 
 Only the shader variants relevant to the render pipeline chosen for the project compile
-(Low-Poly Retro vs PBR, docs/01 section 8.5) — not both, once that selection exists.
+(Low-Poly Retro vs PBR, docs/01 section 8.5) -- not both, once that selection exists.

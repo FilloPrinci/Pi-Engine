@@ -11,7 +11,11 @@
 - `components/RigidbodyComponent.h`, `components/ColliderComponent.h` -- done (M4).
   `RigidbodyComponent` stores a packed `uint32` body id, not a `JPH::BodyID`, so this file
   (included transitively by every `World.h` consumer) never pulls Jolt's headers in --
-  `physics/PhysicsWorld.cpp` is the only place that converts between the two.
+  `physics/PhysicsWorld.cpp` is the only place that converts between the two. M5 adds
+  `AddImpulse()`/`SetHorizontalVelocity()` -- still plain data, no Jolt type involved: a
+  script's call just sets a `pending*`/`hasPending*` pair that `PhysicsWorld::Step()`
+  drains and applies through the real `BodyInterface` at the start of the next physics
+  step, then clears (docs/01 section 9.6: "applied at the start of the next physics step").
 
 Never a permanent raw pointer to a component — always `ComponentHandle<T>`
 (script/ComponentHandle.h, done M3, CLAUDE.md rule 4). M2's systems (FrustumCuller) still

@@ -6,12 +6,12 @@ namespace engine::physics {
 
 PhysicsPhase::PhysicsPhase(float fixedTimestepSeconds) : m_fixedTimestepSeconds(fixedTimestepSeconds) {}
 
-void PhysicsPhase::Update(PhysicsWorld& physicsWorld, float deltaSeconds) {
+void PhysicsPhase::Update(PhysicsWorld& physicsWorld, ecs::World& world, float deltaSeconds) {
     m_accumulatedSeconds += deltaSeconds;
 
     int steps = 0;
     while (m_accumulatedSeconds >= m_fixedTimestepSeconds && steps < kMaxStepsPerUpdate) {
-        physicsWorld.Step(m_fixedTimestepSeconds);
+        physicsWorld.Step(world, m_fixedTimestepSeconds);
         m_accumulatedSeconds -= m_fixedTimestepSeconds;
         ++steps;
     }

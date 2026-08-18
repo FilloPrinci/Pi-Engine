@@ -113,7 +113,7 @@ Primary goal: **minimal vertical slice** — move a cube with the keyboard, jump
 | M2 | Hello Scene — culling active | Minimal ECS (Transform+Mesh), Job System in real use | ✅ Verified on Linux desktop and physical Pi4 hardware |
 | M3 | Hello Script — object moves via keyboard | ScriptComponent/ComponentHandle/REGISTER_SCRIPT working | ✅ Verified on Linux desktop and physical Pi4 hardware |
 | M4 | Hello Physics — cube falls and stops | Jolt↔JobSystem adapter, barriers respected, fixed timestep | ✅ Verified on Linux desktop and physical Pi4 hardware |
-| M5 | **Vertical Slice** — jump + collision via script | Everything together, same frame, no race conditions | ⬜ |
+| M5 | **Vertical Slice** — jump + collision via script | Everything together, same frame, no race conditions | ✅ Verified on Linux desktop and physical Pi4 hardware |
 
 **Preliminary decisions to avoid getting stuck:**
 - Editor: out of this roadmap, built after the core is stable.

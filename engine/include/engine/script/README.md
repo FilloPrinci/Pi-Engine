@@ -1,8 +1,11 @@
 # script
 
-- `ScriptComponent.h` — done (M3): base class (`OnStart`, `OnUpdate`, `OnDestroy`) plus
-  `GetComponent<T>()`/`GetEntity()`/`GetInput()`; extended in M5 with
-  `OnCollisionEnter/Stay/Exit`, `OnTriggerEnter/Exit`.
+- `ScriptComponent.h` — done (M3, extended M5): base class (`OnStart`, `OnUpdate`,
+  `OnDestroy`) plus `GetComponent<T>()`/`GetEntity()`/`GetInput()`. M5 adds
+  `OnCollisionEnter/Stay/Exit`/`OnTriggerEnter/Exit` (default no-ops, dispatched by
+  `physics/CollisionCallbackDispatcher`) and `GetPhysics()` (read-only queries against
+  `physics/PhysicsWorld`, e.g. `Raycast` -- optional, `Attach()`'s `PhysicsWorld*` param
+  defaults to `nullptr` so M3's physics-free sample keeps compiling unchanged).
 - `ComponentHandle.h` — done (M3): safe handle across ECS rearrangements, re-resolves
   through `World::GetComponent<T>()` on every access instead of caching a raw `T*`.
 - `ScriptRegistry.h` + `.cpp` — done (M3): `REGISTER_SCRIPT` factory macro, name -> script

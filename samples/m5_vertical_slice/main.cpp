@@ -5,12 +5,18 @@
 #include "engine/jobs/JobSystem.h"
 #include "engine/physics/PhysicsPhase.h"
 #include "engine/physics/PhysicsWorld.h"
+#include "engine/platform/InputSystem.h"
 #include "engine/platform/SDL2DisplayBackend.h"
 #include "engine/renderer/ForwardLitPipeline.h"
 #include "engine/renderer/MeshLoader.h"
 #include "engine/rhi/RHIBuffer.h"
 #include "engine/rhi/RHIContext.h"
 #include "engine/rhi/RHISwapchain.h"
+#include "engine/script/ScriptComponent.h"
+#include "engine/script/ScriptRegistry.h"
+
+#include "scripts/PlayerScript.h"
+#include "scripts/TargetScript.h"
 
 #include <volk.h>
 
@@ -20,6 +26,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -33,12 +40,15 @@ using engine::ecs::World;
 using engine::jobs::JobSystem;
 using engine::physics::PhysicsPhase;
 using engine::physics::PhysicsWorld;
+using engine::platform::InputSystem;
 using engine::platform::SDL2DisplayBackend;
 using engine::renderer::ForwardLitPipeline;
 using engine::renderer::MeshData;
 using engine::rhi::RHIBuffer;
 using engine::rhi::RHIContext;
 using engine::rhi::RHISwapchain;
+using engine::script::ScriptComponent;
+using engine::script::ScriptRegistry;
 
 namespace {
 
@@ -65,23 +75,23 @@ VkFormat ChooseDepthFormat(VkPhysicalDevice physicalDevice) {
     return VK_FORMAT_UNDEFINED;
 }
 
-// Adds Transform + Collider + Rigidbody and creates the matching Jolt body in one step --
-// every entity in this sample needs all three (docs/03 section 9), no milestone this
-// early has a Transform-only or physics-only entity.
+// Adds Transform + Collider + Rigidbody and creates the matching Jolt body in one step
+// (docs/03 section 9). `isTrigger` marks a sensor volume (M5, docs/01 section 9.6): no
+// collision response, reports OnTriggerEnter/Exit instead of OnCollisionEnter/Stay/Exit.
 Entity SpawnBox(World& world, PhysicsWorld& physicsWorld, const glm::vec3& position,
                 const glm::vec3& scale, const glm::vec3& halfExtents, bool isStatic,
-                float mass = 1.0f, const glm::quat& rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f)) {
+                bool isTrigger = false, float mass = 1.0f) {
     const Entity entity = world.CreateEntity();
 
     TransformComponent transform;
     transform.position = position;
     transform.scale = scale;
-    transform.rotation = rotation;
     world.AddTransform(entity, transform);
 
     ColliderComponent collider;
     collider.shapeType = ColliderComponent::ShapeType::Box;
     collider.halfExtents = halfExtents;
+    collider.isTrigger = isTrigger;
     world.AddCollider(entity, collider);
 
     RigidbodyComponent rigidbody;
@@ -94,16 +104,16 @@ Entity SpawnBox(World& world, PhysicsWorld& physicsWorld, const glm::vec3& posit
 
 } // namespace
 
-// Milestone M4 -- Hello Physics (docs/02 section 4, docs/03 section 9).
-// Exit criterion: the cube falls under gravity and comes to rest on a plane, working
-// Jolt<->JobSystem adapter, barriers respected, fixed timestep.
-//
-// No scripting yet (that's M3, already done, and M5's jump) -- this sample is physics
-// only: a static "ground" (a flattened instance of the same shared cube mesh, scaled to
-// look like a slab) and one dynamic cube dropped a few units above it. Static camera, no
-// culling (only two entities, FrustumCuller's job is already verified in M2).
+// Milestone M5 -- Vertical Slice (docs/02 section 4, docs/03 section 10).
+// Exit criterion: everything together -- move the cube, jump, touch an object and a
+// script reacts, all in the same frame, no race conditions. This sample is where
+// Application's loop finally implements the full phase sequence from CLAUDE.md section 4:
+//   Poll Input -> Script phase -> barrier -> Physics phase -> barrier
+//   -> Collision Callback phase -> Post-Physics/Render
+// Scene: static ground, one dynamic player (WASD + Space to jump, PlayerScript) and one
+// static trigger volume off to the side (TargetScript, shrinks and logs when touched).
 int main(int /*argc*/, char** /*argv*/) {
-    std::printf("Pi-Engine %s -- m4_hello_physics\n", engine::core::GetEngineVersionString());
+    std::printf("Pi-Engine %s -- m5_vertical_slice\n", engine::core::GetEngineVersionString());
 
     SDL2DisplayBackend displayBackend;
     if (!displayBackend.Init()) {
@@ -111,7 +121,7 @@ int main(int /*argc*/, char** /*argv*/) {
     }
 
     RHIContext context;
-    if (!context.Init(displayBackend, "m4_hello_physics")) {
+    if (!context.Init(displayBackend, "m5_vertical_slice")) {
         return EXIT_FAILURE;
     }
 
@@ -122,8 +132,8 @@ int main(int /*argc*/, char** /*argv*/) {
 
     VkDevice device = context.GetDevice();
 
-    // --- Mesh: same shared cube as M1-M3, instanced (with per-entity scale) for both the
-    // ground slab and the falling cube. ---
+    // --- Mesh: same shared cube as M1-M4, instanced (with per-entity scale) for the
+    // ground slab, the player, and the target. ---
     MeshData mesh;
     if (!engine::renderer::LoadMesh(AssetPath("m1_cube.glb").c_str(), mesh)) {
         return EXIT_FAILURE;
@@ -146,44 +156,60 @@ int main(int /*argc*/, char** /*argv*/) {
 
     JobSystem jobSystem;
     if (!jobSystem.Init()) {
-        std::fprintf(stderr, "m4_hello_physics: JobSystem::Init failed\n");
+        std::fprintf(stderr, "m5_vertical_slice: JobSystem::Init failed\n");
         return EXIT_FAILURE;
     }
-    std::printf("m4_hello_physics: JobSystem started with %u worker thread(s)\n",
+    std::printf("m5_vertical_slice: JobSystem started with %u worker thread(s)\n",
                 jobSystem.GetWorkerCount());
 
     PhysicsWorld physicsWorld;
     if (!physicsWorld.Init(jobSystem)) {
-        std::fprintf(stderr, "m4_hello_physics: PhysicsWorld::Init failed\n");
+        std::fprintf(stderr, "m5_vertical_slice: PhysicsWorld::Init failed\n");
         return EXIT_FAILURE;
     }
     PhysicsPhase physicsPhase; // default fixed step: 1/60 s (docs/01 section 9.4)
+    InputSystem inputSystem;
 
     // Ground: a flat static slab, top surface at y=0 (halfExtents.y=0.25 -> center
-    // y=-0.25). Rendered as the shared unit cube stretched via TransformComponent::scale
-    // (scale = 2 * halfExtents, since the mesh itself already spans -0.5..0.5 per axis).
-    const glm::vec3 groundHalfExtents(6.0f, 0.25f, 6.0f);
+    // y=-0.25). Rendered as the shared unit cube stretched via TransformComponent::scale.
+    const glm::vec3 groundHalfExtents(10.0f, 0.25f, 10.0f);
     const Entity ground = SpawnBox(world, physicsWorld, glm::vec3(0.0f, -groundHalfExtents.y, 0.0f),
                                     groundHalfExtents * 2.0f, groundHalfExtents, /*isStatic=*/true);
 
-    // Falling cube: default half-extents (0.5) match the shared mesh 1:1, no scale needed.
-    // Starts 5 units above the ground's top surface, tilted around an off-axis diagonal
-    // (not just a single world axis, so all three dimensions are visibly asymmetric as it
-    // tumbles) -- exercises the solver's rotational dynamics and restitution/friction on
-    // corner/edge impact, not just a flat face-first drop. Settles resting on a face once
-    // the angular velocity damps out, same as a flat drop, just with a tumble first.
-    const glm::quat fallingCubeRotation =
-        glm::angleAxis(glm::radians(35.0f), glm::normalize(glm::vec3(1.0f, 0.3f, 0.6f)));
-    const Entity fallingCube =
-        SpawnBox(world, physicsWorld, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(1.0f),
-                 glm::vec3(0.5f), /*isStatic=*/false, /*mass=*/1.0f, fallingCubeRotation);
+    // Player: default half-extents (0.5) match the shared mesh 1:1, no scale needed.
+    // Starts standing on the ground, PlayerScript created *through the ScriptRegistry
+    // factory* (docs/03 section 8's pattern, not a direct `new`) and given a PhysicsWorld
+    // pointer so it can call GetPhysics().Raycast() for its ground check.
+    const Entity player =
+        SpawnBox(world, physicsWorld, glm::vec3(0.0f, 0.5f, 0.0f), glm::vec3(1.0f), glm::vec3(0.5f),
+                 /*isStatic=*/false);
+    std::unique_ptr<ScriptComponent> playerScript = ScriptRegistry::Create("PlayerScript");
+    if (playerScript == nullptr) {
+        std::fprintf(stderr, "m5_vertical_slice: ScriptRegistry::Create(\"PlayerScript\") failed\n");
+        return EXIT_FAILURE;
+    }
+    playerScript->Attach(world, player, inputSystem, &physicsWorld);
+    playerScript->OnStart();
 
-    const std::array<Entity, 2> renderableEntities{ground, fallingCube};
+    // Target: a static trigger volume a few units away -- walk the player into it.
+    const Entity target =
+        SpawnBox(world, physicsWorld, glm::vec3(5.0f, 0.5f, 0.0f), glm::vec3(1.0f), glm::vec3(0.5f),
+                 /*isStatic=*/true, /*isTrigger=*/true);
+    std::unique_ptr<ScriptComponent> targetScript = ScriptRegistry::Create("TargetScript");
+    if (targetScript == nullptr) {
+        std::fprintf(stderr, "m5_vertical_slice: ScriptRegistry::Create(\"TargetScript\") failed\n");
+        return EXIT_FAILURE;
+    }
+    targetScript->Attach(world, target, inputSystem, &physicsWorld);
+    targetScript->OnStart();
 
-    // --- Depth buffer (same pattern as M1-M3). ---
+    const std::array<Entity, 3> renderableEntities{ground, player, target};
+    const std::array<ScriptComponent*, 2> scripts{playerScript.get(), targetScript.get()};
+
+    // --- Depth buffer (same pattern as M1-M4). ---
     const VkFormat depthFormat = ChooseDepthFormat(context.GetPhysicalDevice());
     if (depthFormat == VK_FORMAT_UNDEFINED) {
-        std::fprintf(stderr, "m4_hello_physics: no supported depth/stencil format found\n");
+        std::fprintf(stderr, "m5_vertical_slice: no supported depth/stencil format found\n");
         return EXIT_FAILURE;
     }
 
@@ -210,7 +236,7 @@ int main(int /*argc*/, char** /*argv*/) {
 
         if (vmaCreateImage(context.GetAllocator(), &imageInfo, &allocInfo, &depthImage,
                             &depthAllocation, nullptr) != VK_SUCCESS) {
-            std::fprintf(stderr, "m4_hello_physics: vmaCreateImage (depth) failed\n");
+            std::fprintf(stderr, "m5_vertical_slice: vmaCreateImage (depth) failed\n");
             return false;
         }
 
@@ -224,7 +250,7 @@ int main(int /*argc*/, char** /*argv*/) {
         viewInfo.subresourceRange.layerCount = 1;
 
         if (vkCreateImageView(device, &viewInfo, nullptr, &depthView) != VK_SUCCESS) {
-            std::fprintf(stderr, "m4_hello_physics: vkCreateImageView (depth) failed\n");
+            std::fprintf(stderr, "m5_vertical_slice: vkCreateImageView (depth) failed\n");
             return false;
         }
         return true;
@@ -246,7 +272,7 @@ int main(int /*argc*/, char** /*argv*/) {
         return EXIT_FAILURE;
     }
 
-    // --- Render pass: color + depth (same as M1-M3). ---
+    // --- Render pass: color + depth (same as M1-M4). ---
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = swapchain.GetImageFormat();
     colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -305,7 +331,7 @@ int main(int /*argc*/, char** /*argv*/) {
 
     VkRenderPass renderPass = VK_NULL_HANDLE;
     if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) {
-        std::fprintf(stderr, "m4_hello_physics: vkCreateRenderPass failed\n");
+        std::fprintf(stderr, "m5_vertical_slice: vkCreateRenderPass failed\n");
         return EXIT_FAILURE;
     }
 
@@ -332,7 +358,7 @@ int main(int /*argc*/, char** /*argv*/) {
 
             if (vkCreateFramebuffer(device, &framebufferInfo, nullptr, &framebuffers[i]) !=
                 VK_SUCCESS) {
-                std::fprintf(stderr, "m4_hello_physics: vkCreateFramebuffer failed for image %zu\n",
+                std::fprintf(stderr, "m5_vertical_slice: vkCreateFramebuffer failed for image %zu\n",
                               i);
                 return false;
             }
@@ -350,7 +376,7 @@ int main(int /*argc*/, char** /*argv*/) {
 
     VkCommandPool commandPool = VK_NULL_HANDLE;
     if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
-        std::fprintf(stderr, "m4_hello_physics: vkCreateCommandPool failed\n");
+        std::fprintf(stderr, "m5_vertical_slice: vkCreateCommandPool failed\n");
         return EXIT_FAILURE;
     }
 
@@ -361,7 +387,7 @@ int main(int /*argc*/, char** /*argv*/) {
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     allocInfo.commandBufferCount = kMaxFramesInFlight;
     if (vkAllocateCommandBuffers(device, &allocInfo, commandBuffers) != VK_SUCCESS) {
-        std::fprintf(stderr, "m4_hello_physics: vkAllocateCommandBuffers failed\n");
+        std::fprintf(stderr, "m5_vertical_slice: vkAllocateCommandBuffers failed\n");
         return EXIT_FAILURE;
     }
 
@@ -379,49 +405,43 @@ int main(int /*argc*/, char** /*argv*/) {
         if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailable[i]) != VK_SUCCESS ||
             vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinished[i]) != VK_SUCCESS ||
             vkCreateFence(device, &fenceInfo, nullptr, &inFlight[i]) != VK_SUCCESS) {
-            std::fprintf(stderr, "m4_hello_physics: failed to create sync objects for frame %d\n", i);
+            std::fprintf(stderr, "m5_vertical_slice: failed to create sync objects for frame %d\n", i);
             return EXIT_FAILURE;
         }
     }
 
     // --- Per-frame state shared between Application's onUpdate and onRender callbacks. ---
+    // Static, elevated view wide enough to see the whole ground and the target off to the
+    // side -- no camera-follow, not needed for the exit criterion.
     Camera camera;
-    camera.target = glm::vec3(0.0f, 1.0f, 0.0f);
-    camera.distance = 13.0f;
-    camera.pitch = 0.45f;
+    camera.target = glm::vec3(2.0f, 0.5f, 0.0f);
+    camera.distance = 16.0f;
+    camera.pitch = 0.65f;
     glm::mat4 currentViewProj(1.0f);
     int currentFrame = 0;
 
     std::uint32_t framesSinceReport = 0;
     auto lastFpsReportTime = std::chrono::steady_clock::now();
-    float logTimerSeconds = 0.0f;
 
     Application::Callbacks callbacks;
 
-    callbacks.onUpdate = [&](float deltaSeconds, const engine::platform::InputState& /*input*/) {
-        // Script phase -> barrier -> Physics phase -> barrier -> Post-Physics (CLAUDE.md
-        // section 4): no scripts yet (M4 doesn't need any), so this frame's "barrier" is
-        // simply PhysicsPhase::Update() returning only once every accrued fixed step has
-        // fully run -- SyncTransforms() right after is exactly the Post-Physics read.
+    callbacks.onUpdate = [&](float deltaSeconds, const engine::platform::InputState& input) {
+        // The full phase sequence from CLAUDE.md section 4, finally all present at once:
+        //   Poll Input (Application, before this callback runs) -> Script phase
+        //   -> barrier -> Physics phase -> barrier -> Collision Callback phase
+        //   -> Post-Physics (camera/view-proj below feeds Render).
+        inputSystem.Update(input);
+        for (ScriptComponent* script : scripts) {
+            script->OnUpdate(deltaSeconds);
+        }
+
         physicsPhase.Update(physicsWorld, world, deltaSeconds);
         physicsWorld.SyncTransforms(world);
-        physicsWorld.DispatchCollisionCallbacks({}); // no scripts in M4 -- see M5 for that phase in real use
+        physicsWorld.DispatchCollisionCallbacks(std::vector<ScriptComponent*>(scripts.begin(), scripts.end()));
 
         const float aspect = static_cast<float>(swapchain.GetExtent().width) /
                               static_cast<float>(swapchain.GetExtent().height);
         currentViewProj = camera.GetProjectionMatrix(aspect) * camera.GetViewMatrix();
-
-        // Numeric confirmation that the cube actually comes to rest (docs/05's guidance
-        // for physics milestones: prefer logging over relying only on visual inspection).
-        logTimerSeconds += deltaSeconds;
-        if (logTimerSeconds >= 0.5f) {
-            const TransformComponent* cubeTransform = world.GetTransform(fallingCube);
-            if (cubeTransform != nullptr) {
-                std::printf("m4_hello_physics: falling cube y=%.4f\n",
-                            static_cast<double>(cubeTransform->position.y));
-            }
-            logTimerSeconds = 0.0f;
-        }
     };
 
     callbacks.onRender = [&]() {
@@ -443,7 +463,7 @@ int main(int /*argc*/, char** /*argv*/) {
             return;
         }
         if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR) {
-            std::fprintf(stderr, "m4_hello_physics: vkAcquireNextImageKHR failed\n");
+            std::fprintf(stderr, "m5_vertical_slice: vkAcquireNextImageKHR failed\n");
             return;
         }
 
@@ -506,7 +526,7 @@ int main(int /*argc*/, char** /*argv*/) {
 
         if (vkQueueSubmit(context.GetGraphicsQueue(), 1, &submitInfo, inFlight[currentFrame]) !=
             VK_SUCCESS) {
-            std::fprintf(stderr, "m4_hello_physics: vkQueueSubmit failed\n");
+            std::fprintf(stderr, "m5_vertical_slice: vkQueueSubmit failed\n");
             return;
         }
 
@@ -530,32 +550,38 @@ int main(int /*argc*/, char** /*argv*/) {
             createDepthResources(swapchain.GetExtent());
             createFramebuffers();
         } else if (presentResult != VK_SUCCESS) {
-            std::fprintf(stderr, "m4_hello_physics: vkQueuePresentKHR failed\n");
+            std::fprintf(stderr, "m5_vertical_slice: vkQueuePresentKHR failed\n");
             return;
         }
 
         currentFrame = (currentFrame + 1) % kMaxFramesInFlight;
 
-        // FPS in the window title -- same stopgap as M0-M3 ahead of the real Dear ImGui
-        // debug overlay (docs/01 section 4, module 4).
+        // FPS + a WASD/jump reminder in the window title -- same stopgap as M0-M4 ahead of
+        // the real Dear ImGui debug overlay (docs/01 section 4, module 4).
         ++framesSinceReport;
         const auto now = std::chrono::steady_clock::now();
         const std::chrono::duration<double> elapsed = now - lastFpsReportTime;
         if (elapsed.count() >= 0.5) {
             const double fps = static_cast<double>(framesSinceReport) / elapsed.count();
-            char title[96];
-            std::snprintf(title, sizeof(title), "Pi-Engine -- m4_hello_physics (%.0f FPS)", fps);
+            char title[112];
+            std::snprintf(title, sizeof(title),
+                          "Pi-Engine -- m5_vertical_slice (%.0f FPS) -- WASD to move, Space to jump",
+                          fps);
             displayBackend.SetWindowTitle(title);
             framesSinceReport = 0;
             lastFpsReportTime = now;
         }
     };
 
-    std::printf("m4_hello_physics: running, close the window to exit.\n");
+    std::printf("m5_vertical_slice: running, WASD to move, Space to jump, walk into the target "
+                "cube. Close the window to exit.\n");
     Application application;
     application.Run(displayBackend, callbacks);
 
     vkDeviceWaitIdle(device);
+
+    playerScript->OnDestroy();
+    targetScript->OnDestroy();
 
     for (int i = 0; i < kMaxFramesInFlight; ++i) {
         vkDestroySemaphore(device, imageAvailable[i], nullptr);
@@ -578,6 +604,6 @@ int main(int /*argc*/, char** /*argv*/) {
     context.Shutdown();
     displayBackend.Shutdown();
 
-    std::printf("m4_hello_physics: clean exit.\n");
+    std::printf("m5_vertical_slice: clean exit.\n");
     return EXIT_SUCCESS;
 }

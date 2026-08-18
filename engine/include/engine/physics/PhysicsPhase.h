@@ -1,5 +1,9 @@
 #pragma once
 
+namespace engine::ecs {
+class World;
+}
+
 namespace engine::physics {
 
 class PhysicsWorld;
@@ -18,7 +22,7 @@ public:
 
     // Accumulates `deltaSeconds` and runs as many fixed-size PhysicsWorld::Step() calls as
     // have accrued. Call once per frame, after the Script phase and before Post-Physics.
-    void Update(PhysicsWorld& physicsWorld, float deltaSeconds);
+    void Update(PhysicsWorld& physicsWorld, ecs::World& world, float deltaSeconds);
 
 private:
     // Caps how many fixed steps a single Update() call will run -- without this, a long

@@ -15,6 +15,7 @@ find_package(Jolt CONFIG REQUIRED)                      # physics/PhysicsWorld (
 # find_package(Jolt)/target_link_libraries(... Jolt::Jolt), see
 # samples/m4_hello_physics/CMakeLists.txt.
 add_library(engine_physics_jolt OBJECT
+    src/physics/CollisionCallbackDispatcher.cpp
     src/physics/JoltJobSystemAdapter.cpp
     src/physics/PhysicsWorld.cpp
 )
@@ -27,15 +28,24 @@ target_link_libraries(engine_physics_jolt PRIVATE Jolt::Jolt)
 pi_engine_set_warnings(engine_physics_jolt)
 
 # vcpkg's Jolt build disables RTTI (libJolt.a has zero `typeinfo for JPH::*` symbols) --
-# linking JoltJobSystemAdapter.cpp against it with RTTI enabled (this project's default)
-# fails with "undefined reference to typeinfo for JPH::JobSystemWithBarrier", since that's
-# the one TU where JoltJobSystemAdapter's vtable/typeinfo actually gets emitted (all of its
-# overrides are defined out-of-line, right here). No RTTI is used in this file, so
-# disabling it here to match Jolt's own build costs nothing.
+# linking a class derived from a polymorphic JPH:: base against it with RTTI enabled (this
+# project's default) fails with "undefined reference to typeinfo for JPH::<Base>", since
+# these are the two TUs where JoltJobSystemAdapter's/CollisionCallbackDispatcher's own
+# vtable/typeinfo actually get emitted (all of their overrides are defined out-of-line,
+# right here). No RTTI is used in either file, so disabling it here to match Jolt's own
+# build costs nothing.
 if(MSVC)
-    set_source_files_properties(src/physics/JoltJobSystemAdapter.cpp PROPERTIES COMPILE_OPTIONS "/GR-")
+    set_source_files_properties(
+        src/physics/CollisionCallbackDispatcher.cpp
+        src/physics/JoltJobSystemAdapter.cpp
+        PROPERTIES COMPILE_OPTIONS "/GR-"
+    )
 else()
-    set_source_files_properties(src/physics/JoltJobSystemAdapter.cpp PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+    set_source_files_properties(
+        src/physics/CollisionCallbackDispatcher.cpp
+        src/physics/JoltJobSystemAdapter.cpp
+        PROPERTIES COMPILE_OPTIONS "-fno-rtti"
+    )
 endif()
 
 add_library(engine_core STATIC

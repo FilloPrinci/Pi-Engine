@@ -1,6 +1,8 @@
 #include "engine/physics/PhysicsWorld.h"
 
 #include "engine/ecs/World.h"
+#include "engine/physics/CollisionCallbackDispatcher.h"
+#include "engine/physics/EntityUserData.h"
 #include "engine/physics/JoltJobSystemAdapter.h"
 
 #include <Jolt/Jolt.h>
@@ -8,9 +10,14 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/Body/Body.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
+#include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/ObjectLayerPairFilterTable.h>
+#include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayerInterfaceTable.h>
 #include <Jolt/Physics/Collision/BroadPhase/ObjectVsBroadPhaseLayerFilterTable.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
@@ -86,6 +93,11 @@ bool PhysicsWorld::Init(jobs::JobSystem& jobSystem) {
                           /*maxContactConstraints=*/1024, *m_broadPhaseLayerInterface,
                           *m_objectVsBroadPhaseLayerFilter, *m_objectLayerPairFilter);
     m_physicsSystem->SetGravity(JPH::Vec3(0.0f, -9.81f, 0.0f));
+
+    // M5 (docs/01 section 9.6): the one ContactListener Jolt allows, feeding
+    // DispatchCollisionCallbacks()'s Collision Callback phase.
+    m_collisionDispatcher = std::make_unique<CollisionCallbackDispatcher>();
+    m_physicsSystem->SetContactListener(m_collisionDispatcher.get());
     return true;
 }
 
@@ -94,7 +106,10 @@ void PhysicsWorld::Shutdown() {
         return; // idempotent -- not initialized, or already shut down
     }
 
+    // m_physicsSystem first: it holds a raw pointer to m_collisionDispatcher as its
+    // contact listener, so the dispatcher must outlive it.
     m_physicsSystem.reset();
+    m_collisionDispatcher.reset();
     m_objectVsBroadPhaseLayerFilter.reset();
     m_objectLayerPairFilter.reset();
     m_broadPhaseLayerInterface.reset();
@@ -138,6 +153,14 @@ bool PhysicsWorld::CreateBody(ecs::World& world, ecs::Entity entity, bool isStat
         bodySettings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
         bodySettings.mMassPropertiesOverride.mMass = rigidbody->mass;
     }
+    // M5: a sensor still generates contact callbacks (routed to OnTriggerEnter/Exit
+    // instead of OnCollisionEnter/Stay/Exit, see CollisionCallbackDispatcher) but no
+    // collision response -- the standard Jolt "trigger volume" pattern (docs/01 9.6).
+    bodySettings.mIsSensor = collider->isTrigger;
+    // M5: lets CollisionCallbackDispatcher/Raycast map a JPH::Body back to the entity it
+    // belongs to (docs/01 9.6: "cast Body::GetUserData to a game object") without a
+    // separate BodyID->Entity table.
+    bodySettings.mUserData = PackEntityUserData(entity);
 
     JPH::BodyInterface& bodyInterface = m_physicsSystem->GetBodyInterface();
     JPH::Body* body = bodyInterface.CreateBody(bodySettings);
@@ -153,8 +176,34 @@ bool PhysicsWorld::CreateBody(ecs::World& world, ecs::Entity entity, bool isStat
     return true;
 }
 
-void PhysicsWorld::Step(float fixedDeltaSeconds) {
-    constexpr int kCollisionSteps = 1; // one sub-step per fixed tick is enough at M4's scale
+void PhysicsWorld::Step(ecs::World& world, float fixedDeltaSeconds) {
+    // Drain every RigidbodyComponent's queued AddImpulse/SetHorizontalVelocity (docs/01
+    // section 9.6: "applied at the start of the next physics step") before Update() runs.
+    JPH::BodyInterface& bodyInterface = m_physicsSystem->GetBodyInterface();
+    for (ecs::RigidbodyComponent& rigidbody : world.Rigidbodies().Data()) {
+        if (rigidbody.bodyId == ecs::RigidbodyComponent::kInvalidBodyId) {
+            continue;
+        }
+        const JPH::BodyID bodyId(rigidbody.bodyId);
+
+        if (rigidbody.hasPendingHorizontalVelocity) {
+            // Horizontal-only: preserve whatever Y velocity the body already has (gravity,
+            // a jump impulse applied below this same frame, ...) -- see
+            // RigidbodyComponent::pendingHorizontalVelocity's own comment for why.
+            const JPH::Vec3 current = bodyInterface.GetLinearVelocity(bodyId);
+            const JPH::Vec3 target = ToJolt(rigidbody.pendingHorizontalVelocity);
+            bodyInterface.SetLinearVelocity(bodyId, JPH::Vec3(target.GetX(), current.GetY(), target.GetZ()));
+            rigidbody.hasPendingHorizontalVelocity = false;
+            rigidbody.pendingHorizontalVelocity = glm::vec3(0.0f);
+        }
+        if (rigidbody.hasPendingImpulse) {
+            bodyInterface.AddImpulse(bodyId, ToJolt(rigidbody.pendingImpulse));
+            rigidbody.hasPendingImpulse = false;
+            rigidbody.pendingImpulse = glm::vec3(0.0f);
+        }
+    }
+
+    constexpr int kCollisionSteps = 1; // one sub-step per fixed tick is enough at this scale
     m_physicsSystem->Update(fixedDeltaSeconds, kCollisionSteps, m_tempAllocator.get(),
                             m_jobSystemAdapter.get());
 }
@@ -182,6 +231,37 @@ void PhysicsWorld::SyncTransforms(ecs::World& world) {
         transform->position = FromJolt(position);
         transform->rotation = FromJolt(rotation);
     }
+}
+
+void PhysicsWorld::DispatchCollisionCallbacks(const std::vector<script::ScriptComponent*>& scripts) {
+    m_collisionDispatcher->Dispatch(scripts);
+}
+
+bool PhysicsWorld::Raycast(const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
+                           RaycastHit& outHit) const {
+    if (maxDistance <= 0.0f) {
+        return false;
+    }
+
+    const JPH::RRayCast ray(ToJolt(origin), ToJolt(glm::normalize(direction)) * maxDistance);
+    JPH::RayCastResult result;
+    if (!m_physicsSystem->GetNarrowPhaseQuery().CastRay(ray, result)) {
+        return false;
+    }
+
+    outHit.point = FromJolt(ray.GetPointOnRay(result.mFraction));
+    outHit.distance = result.mFraction * maxDistance;
+
+    JPH::BodyLockRead lock(m_physicsSystem->GetBodyLockInterface(), result.mBodyID);
+    if (lock.Succeeded()) {
+        const JPH::Body& body = lock.GetBody();
+        outHit.entity = UnpackEntityUserData(body.GetUserData());
+        outHit.normal = FromJolt(body.GetWorldSpaceSurfaceNormal(result.mSubShapeID2, ray.GetPointOnRay(result.mFraction)));
+    } else {
+        outHit.entity = ecs::kInvalidEntity;
+        outHit.normal = glm::vec3(0.0f);
+    }
+    return true;
 }
 
 void PhysicsWorld::SetGravity(const glm::vec3& gravity) {

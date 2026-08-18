@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include <glm/vec3.hpp>
+
 namespace engine::ecs {
 
 // Association between an entity and its Jolt Physics body (M4, docs/03 section 9).
@@ -19,6 +21,34 @@ struct RigidbodyComponent {
     // Read once, at PhysicsWorld::CreateBody() time (M4 scope -- no runtime mass changes
     // yet). Meaningless for a static body.
     float mass = 1.0f;
+
+    // Thin wrapper over Jolt's BodyInterface (docs/01 section 9.6), but still plain data --
+    // never a JPH:: type in this header (see the comment above). Calls from a script's
+    // OnUpdate (pre-physics phase) queue a request here; PhysicsWorld::Step() drains and
+    // clears these at the start of the next physics step and applies them through the real
+    // BodyInterface, then the queue is empty again until a script sets it next frame --
+    // "safe by construction, no lock the developer has to manage" (docs/01 section 9.6).
+    glm::vec3 pendingImpulse = glm::vec3(0.0f);
+    bool hasPendingImpulse = false;
+
+    // Horizontal-only (X/Z) target velocity for a walking/driving character -- PhysicsWorld
+    // preserves the body's own current Y velocity (gravity, jumps, falling) when applying
+    // this, only overwriting the plane a script actually controls. Y is not settable this
+    // way on purpose: a full SetVelocity(vec3) that also stomps Y would fight gravity and
+    // AddImpulse-driven jumps every step. GetVelocity() isn't needed yet (no M5 script
+    // reads it back) so it's not added prematurely.
+    glm::vec3 pendingHorizontalVelocity = glm::vec3(0.0f);
+    bool hasPendingHorizontalVelocity = false;
+
+    void AddImpulse(const glm::vec3& impulse) {
+        pendingImpulse += impulse;
+        hasPendingImpulse = true;
+    }
+
+    void SetHorizontalVelocity(const glm::vec3& velocity) {
+        pendingHorizontalVelocity = velocity;
+        hasPendingHorizontalVelocity = true;
+    }
 };
 
 } // namespace engine::ecs

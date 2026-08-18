@@ -1,0 +1,76 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "vcpkg-base",
+      "hidden": true,
+      "generator": "Ninja Multi-Config",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "pi4",
+      "displayName": "Raspberry Pi 4 (aarch64, cross-compile)",
+      "description": "Cross-compiles from Linux x86_64 to Pi4 (Cortex-A72 / VideoCore VI).",
+      "inherits": "vcpkg-base",
+      "binaryDir": "${sourceDir}/build/pi4",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "arm64-linux",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/aarch64-linux-gnu.cmake",
+        "PI_ENGINE_HARDWARE_PROFILE": "pi4"
+      }
+    },
+    {
+      "name": "pi5",
+      "displayName": "Raspberry Pi 5 (aarch64, cross-compile)",
+      "description": "Cross-compiles from Linux x86_64 to Pi5 (Cortex-A76 / VideoCore VII).",
+      "inherits": "vcpkg-base",
+      "binaryDir": "${sourceDir}/build/pi5",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "arm64-linux",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/aarch64-linux-gnu.cmake",
+        "PI_ENGINE_HARDWARE_PROFILE": "pi5"
+      }
+    },
+    {
+      "name": "linux-pc",
+      "displayName": "Linux desktop (native, x64)",
+      "description": "Primary development platform (docs/02, section 3): fast iteration, RenderDoc, mature Vulkan validation layers.",
+      "inherits": "vcpkg-base",
+      "binaryDir": "${sourceDir}/build/linux-pc",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-linux",
+        "PI_ENGINE_HARDWARE_PROFILE": "desktop"
+      }
+    },
+    {
+      "name": "windows",
+      "displayName": "Windows desktop (native, x64)",
+      "description": "SDL2DisplayBackend only, DirectDRMDisplayBackend excluded at compile time (docs/01, section 7.3).",
+      "inherits": "vcpkg-base",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/windows",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "PI_ENGINE_HARDWARE_PROFILE": "desktop"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "pi4-debug", "configurePreset": "pi4", "configuration": "Debug" },
+    { "name": "pi4-release", "configurePreset": "pi4", "configuration": "RelWithDebInfo" },
+    { "name": "pi5-debug", "configurePreset": "pi5", "configuration": "Debug" },
+    { "name": "pi5-release", "configurePreset": "pi5", "configuration": "RelWithDebInfo" },
+    { "name": "linux-pc-debug", "configurePreset": "linux-pc", "configuration": "Debug" },
+    { "name": "linux-pc-release", "configurePreset": "linux-pc", "configuration": "RelWithDebInfo" },
+    { "name": "windows-debug", "configurePreset": "windows", "configuration": "Debug" },
+    { "name": "windows-release", "configurePreset": "windows", "configuration": "RelWithDebInfo" }
+  ],
+  "testPresets": [
+    { "name": "linux-pc-debug", "configurePreset": "linux-pc", "configuration": "Debug" }
+  ]
+}

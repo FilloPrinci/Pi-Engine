@@ -1,0 +1,33 @@
+# Build output (CMakePresets.json binaryDir for every preset lives under build/)
+build/
+out/
+
+# vcpkg manifest-mode local install/build cache
+vcpkg_installed/
+.vcpkg-cache/
+
+# Per-developer CMake overrides (not shared)
+CMakeUserPresets.json
+
+# Editor tooling generated per-project (docs/01, section 6.3) — not this repo's own config
+compile_commands.json
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Compiled objects / binaries
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Compiled shaders (SPIR-V is generated at build time from shaders/*.vert|*.frag, docs/03 section 5)
+*.spv

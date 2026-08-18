@@ -1,0 +1,16 @@
+{
+  "name": "pi-engine",
+  "version": "0.1.0",
+  "description": "Open source 3D engine optimized for Raspberry Pi 4/5 (Vulkan, C++20).",
+  "homepage": "https://github.com/",
+  "dependencies": [
+    "vulkan-headers",
+    "volk",
+    "vulkan-memory-allocator",
+    "sdl2",
+    "glm",
+    "joltphysics",
+    "imgui",
+    "doctest"
+  ]
+}

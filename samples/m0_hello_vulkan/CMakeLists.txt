@@ -1,0 +1,3 @@
+add_executable(m0_hello_vulkan main.cpp)
+target_link_libraries(m0_hello_vulkan PRIVATE engine_core)
+pi_engine_set_warnings(m0_hello_vulkan)

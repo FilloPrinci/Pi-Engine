@@ -1,0 +1,34 @@
+---
+# Static lint rules, complementary to the runtime rules in CLAUDE.md (e.g. no exceptions in
+# hot-path code, ComponentHandle<T> instead of raw pointers) that clang-tidy cannot express.
+Checks: >
+  -*,
+  bugprone-*,
+  cppcoreguidelines-*,
+  performance-*,
+  modernize-*,
+  readability-*,
+  -modernize-use-trailing-return-type,
+  -readability-identifier-length,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -readability-magic-numbers,
+  -cppcoreguidelines-non-private-member-variables-in-classes,
+  -misc-non-private-member-variables-in-classes
+
+WarningsAsErrors: ''
+HeaderFilterRegex: '^.*/engine/include/.*'
+FormatStyle: file
+
+CheckOptions:
+  - key: readability-identifier-naming.ClassCase
+    value: CamelCase
+  - key: readability-identifier-naming.StructCase
+    value: CamelCase
+  - key: readability-identifier-naming.MethodCase
+    value: CamelCase
+  - key: readability-identifier-naming.PrivateMemberPrefix
+    value: m_
+  - key: readability-identifier-naming.PrivateMemberCase
+    value: camelBack
+  - key: readability-identifier-naming.NamespaceCase
+    value: lower_case

@@ -1,9 +1,9 @@
-#include "AssetImporter.h"
-#include "engine/renderer/CookedMesh.h"
-#include "engine/renderer/MeshLoader.h"
+#include "CookMesh.h"
+#include "CookShader.h"
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 // Minimal offline Asset Cooker (docs/01 section 12.4): "a CLI tool separate from the
 // engine runtime -- shares code where it makes sense (e.g. the math library), but is a
@@ -13,35 +13,28 @@
 // sources (see tools/cooker/CMakeLists.txt), reusing that code without pulling in
 // anything the engine's rendering/physics/platform layers need.
 //
-// M6/M7 scope: meshes only (glTF/GLB -> the minimal binary format in
-// engine/renderer/CookedMesh.h), tagged with a persistent Asset GUID (docs/01 section
-// 12.3, engine/asset/AssetGuid.h). Textures/shaders/scenes are all still out of scope
-// (docs/01 section 12.2 describes the fuller pipeline; see tools/cooker/README.md and
-// CLAUDE.md for what's actually built vs. deferred).
+// Two subcommands so far (M6/M7): `mesh` (glTF/GLB -> engine/renderer/CookedMesh.h's
+// binary format, tagged with a persistent Asset GUID, docs/01 section 12.3) and `shader`
+// (GLSL -> SPIR-V via shaderc, replacing every sample's own glslc invocation). Textures/
+// scenes are still out of scope for this tool -- scenes stay raw JSON even after M7 (see
+// engine/scene/README.md), and there's no texture pipeline built yet at all.
 int main(int argc, char** argv) {
-    if (argc != 3) {
-        std::fprintf(stderr, "usage: cooker <input.gltf|.glb> <output.mesh>\n");
+    if (argc < 2) {
+        std::fprintf(stderr, "usage: cooker <mesh|shader> <input> <output>\n");
         return EXIT_FAILURE;
     }
 
-    const char* inputPath = argv[1];
-    const char* outputPath = argv[2];
-
-    const engine::asset::AssetGuid guid = GetOrCreateAssetGuid(inputPath);
-
-    engine::renderer::MeshData mesh;
-    if (!engine::renderer::LoadMesh(inputPath, mesh)) {
-        std::fprintf(stderr, "cooker: failed to load \"%s\"\n", inputPath);
-        return EXIT_FAILURE;
+    const char* command = argv[1];
+    // Shift argv so each Cook*() sees argv[0]="mesh"/"shader", argv[1]=input,
+    // argv[2]=output -- same argc/argv shape main() itself gets, just one level in.
+    if (std::strcmp(command, "mesh") == 0) {
+        return CookMesh(argc - 1, argv + 1);
+    }
+    if (std::strcmp(command, "shader") == 0) {
+        return CookShader(argc - 1, argv + 1);
     }
 
-    if (!engine::renderer::WriteCookedMesh(outputPath, guid, mesh)) {
-        std::fprintf(stderr, "cooker: failed to write \"%s\"\n", outputPath);
-        return EXIT_FAILURE;
-    }
-
-    std::printf("cooker: \"%s\" -> \"%s\" (guid %s, %zu vertices, %zu indices)\n", inputPath,
-                outputPath, engine::asset::ToString(guid).c_str(), mesh.vertices.size(),
-                mesh.indices.size());
-    return EXIT_SUCCESS;
+    std::fprintf(stderr, "cooker: unknown subcommand \"%s\" (expected \"mesh\" or \"shader\")\n",
+                 command);
+    return EXIT_FAILURE;
 }

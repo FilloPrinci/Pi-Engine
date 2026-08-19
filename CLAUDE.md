@@ -105,6 +105,7 @@ Pi-Engine/
 | Dear ImGui | Debug overlay | vcpkg |
 | doctest | Unit testing | vcpkg |
 | nlohmann-json | Asset sidecar (`.meta`)/scene+prefab serialization | vcpkg (header-only); `tools/cooker` (sidecar) and `engine_core`'s `scene/` module (scene/prefab JSON, read at runtime) |
+| shaderc | GLSL → SPIR-V compilation | vcpkg; `tools/cooker` only (`cooker shader`, replaces each sample's own direct `glslc` invocation) |
 
 ## 8. Milestone roadmap (current project status)
 

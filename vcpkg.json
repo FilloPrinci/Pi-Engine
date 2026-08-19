@@ -15,6 +15,7 @@
     "joltphysics",
     "imgui",
     "doctest",
-    "nlohmann-json"
+    "nlohmann-json",
+    "shaderc"
   ]
 }

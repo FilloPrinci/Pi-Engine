@@ -31,11 +31,11 @@ parsing glTF at runtime (see [`samples/`](samples/)).
   sudo apt install autoconf autoconf-archive automake libtool   # Debian/Ubuntu
   sudo dnf install autoconf autoconf-archive automake libtool   # Fedora
   ```
-- [Vulkan SDK](https://vulkan.lunarg.com/) — provides `glslc`, used to compile
-  `shaders/*.vert`/`*.frag` to SPIR-V at build time (see `shaders/README.md`), and is the
-  usual source of the Vulkan validation layers used in debug builds. Needs to be on `PATH`
-  or discoverable via the `VULKAN_SDK` environment variable (the SDK's own `setup-env.sh`
-  does both).
+- [Vulkan SDK](https://vulkan.lunarg.com/) — the usual source of the Vulkan validation
+  layers used in debug builds. `shaders/*.vert`/`*.frag` are compiled to SPIR-V by the
+  Cooker (`tools/cooker`, via the vcpkg-provided `shaderc` library, see
+  `shaders/README.md`), not by a local `glslc`, so the SDK itself is optional if you only
+  need to build.
 - **Cross-compiling for Pi4/Pi5** from Linux x86_64 (the primary dev workflow, see
   [`docs/02-mvp-roadmap-analysis.md`](docs/02-mvp-roadmap-analysis.md) section 3): an
   `aarch64-linux-gnu` cross toolchain, e.g. on Debian/Ubuntu:

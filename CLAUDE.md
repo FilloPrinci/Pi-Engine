@@ -62,7 +62,7 @@ No script reads/writes physics data while the solver is working on it — guaran
 
 - **Language: ALWAYS English** — code, comments, logs, error messages, Editor text. No exceptions, including the design/analysis documents in `docs/` (originally written in Italian, translated to English on 2026-08-18).
 - Classes/types: `PascalCase`. Public methods: `PascalCase` (`OnUpdate`, `GetComponent`). Private members: `m_camelCase`. Files: `snake_case`.
-- Namespace: `engine::<module>` (`engine::rhi`, `engine::ecs`, `engine::jobs`, `engine::renderer`, `engine::script`, `engine::physics`, `engine::platform`, `engine::asset`, `engine::scene`).
+- Namespace: `engine::<module>` (`engine::rhi`, `engine::ecs`, `engine::jobs`, `engine::renderer`, `engine::script`, `engine::physics`, `engine::platform`, `engine::asset`, `engine::scene`, `engine::debug`).
 - **No C++ exceptions in hot-path code** (renderer, physics, job system) — return code/bool + out param, `ENGINE_ASSERT` macro. Exceptions allowed only in the Cooker/offline tooling.
 - Standard `std::` for the M0-M5 MVP — no premature custom allocators.
 - A single `.clang-format` at the root (LLVM base, 4 spaces, column 100).
@@ -77,7 +77,7 @@ Pi-Engine/
 │   ├── toolchains/aarch64-linux-gnu.cmake
 │   └── CompilerWarnings.cmake
 ├── engine/
-│   ├── include/engine/{core,platform,rhi,ecs,jobs,renderer,script,physics,asset,scene}/
+│   ├── include/engine/{core,platform,rhi,ecs,jobs,renderer,script,physics,asset,scene,debug}/
 │   └── src/                    # same structure as include/
 ├── tests/                      # doctest — ECS, math, Job System
 ├── samples/
@@ -86,6 +86,7 @@ Pi-Engine/
 │   ├── m7_scene_and_prefab/    # post-vertical-slice Asset Pipeline step (M7 2/5)
 │   ├── m7_textures/            # post-vertical-slice Asset Pipeline step (M7 4/5)
 │   ├── m7_lod/                 # post-vertical-slice Asset Pipeline step (M7 5/5)
+│   ├── e1_imgui_overlay/       # Editor step E1 (docs/06-editor-roadmap.md)
 ├── tools/
 │   └── cooker/                 # offline Asset Cooker CLI (M6, docs/01 section 12.4)
 ├── assets/                     # raw source assets (docs/01 section 12.1)
@@ -105,7 +106,7 @@ Pi-Engine/
 | stb_image | PNG decoding (`cooker texture`) | vendored (single header), `tools/cooker` only |
 | Jolt Physics | Physics | vcpkg |
 | miniaudio | Audio | vendored (single header) |
-| Dear ImGui | Debug overlay | vcpkg |
+| Dear ImGui | Debug overlay / Editor UI | vcpkg (core library only); Vulkan/SDL2 backend glue vendored in `third_party/imgui_backends/` (see that directory's README) |
 | doctest | Unit testing | vcpkg |
 | nlohmann-json | Asset sidecar (`.meta`)/scene+prefab serialization | vcpkg (header-only); `tools/cooker` (sidecar) and `engine_core`'s `scene/` module (scene/prefab JSON, read at runtime) |
 | shaderc | GLSL → SPIR-V compilation | vcpkg; `tools/cooker` only (`cooker shader`, replaces each sample's own direct `glslc` invocation) |

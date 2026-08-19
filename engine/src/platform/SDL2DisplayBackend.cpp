@@ -62,6 +62,9 @@ std::vector<const char*> SDL2DisplayBackend::GetRequiredVulkanExtensions() {
 void SDL2DisplayBackend::PollEvents(InputState& out) {
     SDL_Event event;
     while (SDL_PollEvent(&event) != 0) {
+        if (m_rawEventHandler) {
+            m_rawEventHandler(event);
+        }
         if (event.type == SDL_QUIT) {
             m_shouldQuit = true;
         } else if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE) {

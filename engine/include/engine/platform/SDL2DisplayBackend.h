@@ -2,7 +2,10 @@
 
 #include "engine/platform/IDisplayBackend.h"
 
+#include <functional>
+
 struct SDL_Window;
+union SDL_Event;
 
 namespace engine::platform {
 
@@ -30,9 +33,25 @@ public:
     // (docs/01 section 4, module 4).
     void SetWindowTitle(const char* title);
 
+    // Not part of IDisplayBackend either -- lets a consumer (engine::debug::ImGuiOverlay,
+    // Editor step E1) see every raw SDL_Event PollEvents() already loops over internally,
+    // without SDL2DisplayBackend needing to know anything about ImGui or any other
+    // specific consumer. Same dependency-injection reasoning as
+    // engine::scene::CreatePhysicsBodyFn (docs/01 section 12.2, engine/scene/README.md):
+    // keeps platform/ decoupled from debug/ at the symbol/link level. Called once per
+    // event, in PollEvents(), before that event's InputState translation.
+    using RawEventHandler = std::function<void(const SDL_Event&)>;
+    void SetRawEventHandler(RawEventHandler handler) { m_rawEventHandler = std::move(handler); }
+
+    // Also not part of IDisplayBackend -- ImGui_ImplSDL2_InitForVulkan() needs the raw
+    // SDL_Window*, which IDisplayBackend deliberately never exposes (DirectDRMDisplayBackend
+    // has no SDL_Window at all).
+    SDL_Window* GetSDLWindow() const { return m_window; }
+
 private:
     SDL_Window* m_window = nullptr;
     bool m_shouldQuit = false;
+    RawEventHandler m_rawEventHandler;
 };
 
 } // namespace engine::platform

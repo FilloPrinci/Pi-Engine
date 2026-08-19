@@ -49,6 +49,7 @@ else()
 endif()
 
 add_library(engine_core STATIC
+    src/asset/AssetGuid.cpp
     src/core/Application.cpp
     src/core/Camera.cpp
     src/core/EngineVersion.cpp

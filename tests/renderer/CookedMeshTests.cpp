@@ -4,6 +4,8 @@
 
 #include <cstdio>
 
+using engine::asset::AssetGuid;
+using engine::asset::GenerateAssetGuid;
 using engine::renderer::LoadCookedMesh;
 using engine::renderer::MeshData;
 using engine::renderer::Vertex;
@@ -22,7 +24,7 @@ struct ScopedTempFile {
 
 } // namespace
 
-TEST_CASE("WriteCookedMesh/LoadCookedMesh round-trip preserves vertices and indices") {
+TEST_CASE("WriteCookedMesh/LoadCookedMesh round-trip preserves vertices, indices, and guid") {
     ScopedTempFile file("cooked_mesh_roundtrip.tmp.mesh");
 
     MeshData original;
@@ -32,12 +34,15 @@ TEST_CASE("WriteCookedMesh/LoadCookedMesh round-trip preserves vertices and indi
         Vertex{glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f)},
     };
     original.indices = {0, 1, 2};
+    const AssetGuid guid = GenerateAssetGuid();
 
-    REQUIRE(WriteCookedMesh(file.m_path, original));
+    REQUIRE(WriteCookedMesh(file.m_path, guid, original));
 
     MeshData loaded;
-    REQUIRE(LoadCookedMesh(file.m_path, loaded));
+    AssetGuid loadedGuid;
+    REQUIRE(LoadCookedMesh(file.m_path, loaded, &loadedGuid));
 
+    CHECK(loadedGuid == guid);
     REQUIRE(loaded.vertices.size() == original.vertices.size());
     for (std::size_t i = 0; i < original.vertices.size(); ++i) {
         CHECK(loaded.vertices[i].position == original.vertices[i].position);
@@ -46,11 +51,19 @@ TEST_CASE("WriteCookedMesh/LoadCookedMesh round-trip preserves vertices and indi
     CHECK(loaded.indices == original.indices);
 }
 
+TEST_CASE("LoadCookedMesh's outGuid parameter is optional") {
+    ScopedTempFile file("cooked_mesh_no_guid_out.tmp.mesh");
+    REQUIRE(WriteCookedMesh(file.m_path, GenerateAssetGuid(), MeshData{}));
+
+    MeshData loaded;
+    CHECK(LoadCookedMesh(file.m_path, loaded)); // no third argument -- must still compile/work
+}
+
 TEST_CASE("WriteCookedMesh/LoadCookedMesh round-trip handles an empty mesh") {
     ScopedTempFile file("cooked_mesh_empty.tmp.mesh");
 
     MeshData empty;
-    REQUIRE(WriteCookedMesh(file.m_path, empty));
+    REQUIRE(WriteCookedMesh(file.m_path, GenerateAssetGuid(), empty));
 
     MeshData loaded;
     REQUIRE(LoadCookedMesh(file.m_path, loaded));
@@ -74,4 +87,29 @@ TEST_CASE("LoadCookedMesh rejects a file that isn't a cooked mesh") {
 TEST_CASE("LoadCookedMesh rejects a missing file") {
     MeshData loaded;
     CHECK_FALSE(LoadCookedMesh("this_file_does_not_exist.mesh", loaded));
+}
+
+TEST_CASE("LoadCookedMesh rejects a stale version 1 file (pre-GUID format)") {
+    ScopedTempFile file("cooked_mesh_old_version.tmp.mesh");
+
+    // Hand-write a v1 header (magic + version + vertex/index counts, no guid fields) --
+    // the exact layout WriteCookedMesh produced before M7 added the guid. It's also
+    // smaller than the current header, so this is actually rejected by the "too small for
+    // a header" check rather than reaching the version comparison -- still exactly the
+    // "don't silently misread an old cooked file" guarantee this test cares about.
+    struct OldHeaderV1 {
+        char magic[4];
+        std::uint32_t version;
+        std::uint32_t vertexCount;
+        std::uint32_t indexCount;
+    };
+    OldHeaderV1 oldHeader{{'P', 'I', 'C', 'M'}, 1, 0, 0};
+
+    std::FILE* f = std::fopen(file.m_path, "wb");
+    REQUIRE(f != nullptr);
+    std::fwrite(&oldHeader, sizeof(oldHeader), 1, f);
+    std::fclose(f);
+
+    MeshData loaded;
+    CHECK_FALSE(LoadCookedMesh(file.m_path, loaded));
 }

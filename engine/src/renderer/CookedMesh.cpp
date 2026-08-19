@@ -11,7 +11,7 @@ static_assert(sizeof(Vertex) == 2 * sizeof(glm::vec3),
               "builds for, but WriteCookedMesh/LoadCookedMesh would need a real per-field "
               "serialization if that ever changed.");
 
-bool WriteCookedMesh(const char* path, const MeshData& mesh) {
+bool WriteCookedMesh(const char* path, const asset::AssetGuid& guid, const MeshData& mesh) {
     std::FILE* file = std::fopen(path, "wb");
     if (file == nullptr) {
         std::fprintf(stderr, "WriteCookedMesh: failed to open \"%s\" for writing\n", path);
@@ -21,6 +21,8 @@ bool WriteCookedMesh(const char* path, const MeshData& mesh) {
     CookedMeshHeader header{};
     std::memcpy(header.magic, kCookedMeshMagic, sizeof(header.magic));
     header.version = kCookedMeshVersion;
+    header.guidHigh = guid.high;
+    header.guidLow = guid.low;
     header.vertexCount = static_cast<std::uint32_t>(mesh.vertices.size());
     header.indexCount = static_cast<std::uint32_t>(mesh.indices.size());
 
@@ -41,7 +43,7 @@ bool WriteCookedMesh(const char* path, const MeshData& mesh) {
     return ok;
 }
 
-bool LoadCookedMesh(const char* path, MeshData& outMesh) {
+bool LoadCookedMesh(const char* path, MeshData& outMesh, asset::AssetGuid* outGuid) {
     std::FILE* file = std::fopen(path, "rb");
     if (file == nullptr) {
         std::fprintf(stderr, "LoadCookedMesh: failed to open \"%s\"\n", path);
@@ -64,6 +66,11 @@ bool LoadCookedMesh(const char* path, MeshData& outMesh) {
                       header.version, kCookedMeshVersion);
         std::fclose(file);
         return false;
+    }
+
+    if (outGuid != nullptr) {
+        outGuid->high = header.guidHigh;
+        outGuid->low = header.guidLow;
     }
 
     outMesh.vertices.resize(header.vertexCount);

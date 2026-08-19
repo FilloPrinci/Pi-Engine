@@ -62,7 +62,7 @@ No script reads/writes physics data while the solver is working on it — guaran
 
 - **Language: ALWAYS English** — code, comments, logs, error messages, Editor text. No exceptions, including the design/analysis documents in `docs/` (originally written in Italian, translated to English on 2026-08-18).
 - Classes/types: `PascalCase`. Public methods: `PascalCase` (`OnUpdate`, `GetComponent`). Private members: `m_camelCase`. Files: `snake_case`.
-- Namespace: `engine::<module>` (`engine::rhi`, `engine::ecs`, `engine::jobs`, `engine::renderer`, `engine::script`, `engine::physics`, `engine::platform`).
+- Namespace: `engine::<module>` (`engine::rhi`, `engine::ecs`, `engine::jobs`, `engine::renderer`, `engine::script`, `engine::physics`, `engine::platform`, `engine::asset`).
 - **No C++ exceptions in hot-path code** (renderer, physics, job system) — return code/bool + out param, `ENGINE_ASSERT` macro. Exceptions allowed only in the Cooker/offline tooling.
 - Standard `std::` for the M0-M5 MVP — no premature custom allocators.
 - A single `.clang-format` at the root (LLVM base, 4 spaces, column 100).
@@ -77,7 +77,7 @@ Pi-Engine/
 │   ├── toolchains/aarch64-linux-gnu.cmake
 │   └── CompilerWarnings.cmake
 ├── engine/
-│   ├── include/engine/{core,platform,rhi,ecs,jobs,renderer,script,physics}/
+│   ├── include/engine/{core,platform,rhi,ecs,jobs,renderer,script,physics,asset}/
 │   └── src/                    # same structure as include/
 ├── tests/                      # doctest — ECS, math, Job System
 ├── samples/
@@ -103,6 +103,7 @@ Pi-Engine/
 | miniaudio | Audio | vendored (single header) |
 | Dear ImGui | Debug overlay | vcpkg |
 | doctest | Unit testing | vcpkg |
+| nlohmann-json | Asset sidecar (`.meta`)/manifest/scene serialization | vcpkg (header-only), `tools/cooker` only through M7 |
 
 ## 8. Milestone roadmap (current project status)
 

@@ -77,6 +77,51 @@ EntityDesc ParseEntity(const nlohmann::json& json) {
     return desc;
 }
 
+nlohmann::json WriteVec3(const glm::vec3& v) {
+    return nlohmann::json::array({v.x, v.y, v.z});
+}
+
+nlohmann::json WriteQuat(const glm::quat& q) {
+    // [x, y, z, w] -- inverse of ReadQuat()'s (w, x, y, z) glm::quat construction above.
+    return nlohmann::json::array({q.x, q.y, q.z, q.w});
+}
+
+nlohmann::json WriteEntity(const EntityDesc& desc) {
+    nlohmann::json entityJson;
+
+    nlohmann::json transform;
+    transform["position"] = WriteVec3(desc.position);
+    transform["rotation"] = WriteQuat(desc.rotation);
+    transform["scale"] = WriteVec3(desc.scale);
+    entityJson["transform"] = transform;
+
+    if (desc.hasMesh) {
+        nlohmann::json mesh;
+        mesh["guid"] = asset::ToString(desc.meshGuid);
+        mesh["boundsRadius"] = desc.meshBoundsRadius;
+        entityJson["mesh"] = mesh;
+    }
+
+    if (desc.hasCollider) {
+        nlohmann::json collider;
+        collider["shape"] =
+            desc.colliderShape == ecs::ColliderComponent::ShapeType::Sphere ? "sphere" : "box";
+        collider["halfExtents"] = WriteVec3(desc.colliderHalfExtents);
+        collider["radius"] = desc.colliderRadius;
+        collider["isTrigger"] = desc.colliderIsTrigger;
+        entityJson["collider"] = collider;
+    }
+
+    if (desc.hasRigidbody) {
+        nlohmann::json rigidbody;
+        rigidbody["isStatic"] = desc.rigidbodyIsStatic;
+        rigidbody["mass"] = desc.rigidbodyMass;
+        entityJson["rigidbody"] = rigidbody;
+    }
+
+    return entityJson;
+}
+
 } // namespace
 
 bool ParseSceneDocument(const char* path, std::vector<EntityDesc>& outEntities) {
@@ -109,6 +154,74 @@ bool ParseSceneDocument(const char* path, std::vector<EntityDesc>& outEntities) 
         std::fprintf(stderr, "ParseSceneDocument: \"%s\" is malformed: %s\n", path, e.what());
         return false;
     }
+}
+
+bool WriteSceneDocument(const char* path, const std::vector<EntityDesc>& entities) {
+    nlohmann::json document;
+    document["_comment"] = "Written by the Pi-Engine Editor's Save action -- see "
+                           "engine::scene::WriteSceneDocument.";
+
+    nlohmann::json entitiesJson = nlohmann::json::array();
+    for (const EntityDesc& desc : entities) {
+        entitiesJson.push_back(WriteEntity(desc));
+    }
+    document["entities"] = entitiesJson;
+
+    std::ofstream out(path);
+    if (!out.is_open()) {
+        std::fprintf(stderr, "WriteSceneDocument: failed to open \"%s\" for writing\n", path);
+        return false;
+    }
+    out << document.dump(2);
+    if (!out) {
+        std::fprintf(stderr, "WriteSceneDocument: failed while writing \"%s\"\n", path);
+        return false;
+    }
+    return true;
+}
+
+std::vector<EntityDesc> ExtractEntityDescs(const ecs::World& world) {
+    std::vector<EntityDesc> entities;
+    const auto& transformEntities = world.Transforms().Entities();
+    const auto& transformData = world.Transforms().Data();
+    entities.reserve(transformEntities.size());
+
+    for (std::size_t i = 0; i < transformEntities.size(); ++i) {
+        const ecs::Entity entity = transformEntities[i];
+        EntityDesc desc;
+        desc.position = transformData[i].position;
+        desc.rotation = transformData[i].rotation;
+        desc.scale = transformData[i].scale;
+
+        if (const ecs::MeshComponent* mesh = world.GetMesh(entity)) {
+            desc.hasMesh = true;
+            desc.meshGuid = mesh->meshGuid;
+            desc.meshBoundsRadius = mesh->boundsRadius;
+        }
+
+        if (const ecs::ColliderComponent* collider = world.GetCollider(entity)) {
+            desc.hasCollider = true;
+            desc.colliderShape = collider->shapeType;
+            desc.colliderHalfExtents = collider->halfExtents;
+            desc.colliderRadius = collider->radius;
+            desc.colliderIsTrigger = collider->isTrigger;
+        }
+
+        if (world.GetRigidbody(entity) != nullptr) {
+            // See WriteSceneDocument/ExtractEntityDescs's own header comment -- isStatic
+            // isn't recoverable from the live component, so this entity's rigidbody is
+            // dropped rather than guessed.
+            std::fprintf(stderr,
+                         "ExtractEntityDescs: entity %u.%u has a Rigidbody component whose "
+                         "static/dynamic flag can't be recovered -- omitting \"rigidbody\" "
+                         "from the saved file for this entity\n",
+                         entity.index, entity.generation);
+        }
+
+        entities.push_back(desc);
+    }
+
+    return entities;
 }
 
 std::vector<ecs::Entity> SpawnEntities(ecs::World& world, const std::vector<EntityDesc>& entities,

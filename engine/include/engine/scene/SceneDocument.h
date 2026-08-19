@@ -22,6 +22,28 @@ namespace engine::scene {
 // implementation detail of the .cpp -- this header, like EntityDesc.h, never exposes it.
 bool ParseSceneDocument(const char* path, std::vector<EntityDesc>& outEntities);
 
+// Inverse of ParseSceneDocument() -- writes `entities` as a scene/prefab JSON document at
+// `path`, using the exact same field names/shapes ParseEntity() (SceneDocument.cpp) reads,
+// so a file this writes loads back through ParseSceneDocument()/LoadScene() unchanged
+// (Editor step E4, docs/06-editor-roadmap.md: "round-trips through the same format
+// LoadScene already reads, no new format invented"). Overwrites `path` if it already
+// exists. Never called at runtime by a shipped game -- only the Editor's "Save" action.
+bool WriteSceneDocument(const char* path, const std::vector<EntityDesc>& entities);
+
+// Inverse of SpawnEntities() -- reads every entity in `world` that has a Transform (what
+// SpawnEntities() always adds, so this is the same "one EntityDesc per spawned entity"
+// set) back into a flat EntityDesc list, picking up whatever live edits an Inspector panel
+// made since the entities were spawned. One known, deliberate gap: RigidbodyComponent
+// doesn't store whether a body is static or dynamic (SpawnEntities() only ever *reads*
+// EntityDesc::rigidbodyIsStatic once, to decide which PhysicsWorld::CreateBody() to call,
+// then discards it) -- an entity with a Rigidbody is skipped here (with a stderr warning)
+// rather than guessing, since writing a wrong isStatic value would silently corrupt the
+// saved file instead of just omitting something. Not a concern for the Editor yet: nothing
+// in it creates a Rigidbody in the first place (Editor step E2's Scene View has no
+// PhysicsWorld), so this only matters for a scene document that already had one before the
+// Editor loaded it.
+std::vector<EntityDesc> ExtractEntityDescs(const ecs::World& world);
+
 // Called once per EntityDesc that has both a "collider" and a "rigidbody" block, after its
 // ECS components already exist -- expected to call physics::PhysicsWorld::CreateBody(world,
 // entity, isStatic). A callback instead of a physics::PhysicsWorld* on purpose: engine/scene/

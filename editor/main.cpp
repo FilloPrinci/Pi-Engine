@@ -392,6 +392,11 @@ int main(int argc, char** argv) {
     //     Editor -- but the check costs nothing and stays correct once something does). ---
     Entity selectedEntity = engine::ecs::kInvalidEntity;
 
+    // --- Save status (Editor step E4) -- shown for a few seconds after a Save click so
+    //     the button press has visible feedback beyond a stderr line. ---
+    std::string saveStatus;
+    float saveStatusRemainingSeconds = 0.0f;
+
     Application::Callbacks callbacks;
 
     callbacks.onUpdate = [&](float deltaSeconds, const engine::platform::InputState& input) {
@@ -431,6 +436,20 @@ int main(int argc, char** argv) {
         ImGui::Text("FPS: %.0f", lastReportedFps);
         ImGui::Separator();
         ImGui::TextUnformatted("Camera: A/D yaw, W/S pitch, Up/Down zoom");
+        ImGui::Separator();
+        // Writes back through the same JSON schema LoadScene() reads (docs/06-editor-
+        // roadmap.md, E4) -- overwrites scenePath, no "Save As" yet (Editor step E7's
+        // Project Hub is the more natural place to manage multiple scene files).
+        if (ImGui::Button("Save")) {
+            const bool ok = engine::scene::SaveScene(scenePath.c_str(), world);
+            saveStatus = ok ? "Saved." : "Save failed -- see stderr.";
+            saveStatusRemainingSeconds = 3.0f;
+        }
+        if (saveStatusRemainingSeconds > 0.0f) {
+            saveStatusRemainingSeconds -= deltaSeconds;
+            ImGui::SameLine();
+            ImGui::TextUnformatted(saveStatus.c_str());
+        }
         ImGui::End();
 
         // --- Scene panel: every entity with a Transform (docs/06-editor-roadmap.md, E3)

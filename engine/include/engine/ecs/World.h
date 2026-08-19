@@ -47,6 +47,7 @@ public:
     bool HasCollider(Entity entity) const;
 
     ComponentStorage<TransformComponent>& Transforms() { return m_transforms; }
+    const ComponentStorage<TransformComponent>& Transforms() const { return m_transforms; }
     ComponentStorage<MeshComponent>& Meshes() { return m_meshes; }
     const ComponentStorage<MeshComponent>& Meshes() const { return m_meshes; }
     ComponentStorage<RigidbodyComponent>& Rigidbodies() { return m_rigidbodies; }

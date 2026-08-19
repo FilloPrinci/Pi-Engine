@@ -18,4 +18,11 @@ namespace engine::scene {
 bool LoadScene(const char* path, ecs::World& world,
                const CreatePhysicsBodyFn& createPhysicsBody = {});
 
+// Writes every entity currently in `world` back to a scene JSON document at `path`
+// (Editor step E4, docs/06-editor-roadmap.md) -- the Editor's "Save" action. See
+// SceneDocument.h's ExtractEntityDescs() for the one deliberate gap (Rigidbody
+// static/dynamic flag isn't recoverable, so such an entity is omitted with a warning
+// rather than guessed).
+bool SaveScene(const char* path, const ecs::World& world);
+
 } // namespace engine::scene

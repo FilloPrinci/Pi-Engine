@@ -17,10 +17,13 @@ using engine::ecs::RigidbodyComponent;
 using engine::ecs::TransformComponent;
 using engine::ecs::World;
 using engine::scene::EntityDesc;
+using engine::scene::ExtractEntityDescs;
 using engine::scene::LoadScene;
 using engine::scene::ParseSceneDocument;
 using engine::scene::Prefab;
+using engine::scene::SaveScene;
 using engine::scene::SpawnEntities;
+using engine::scene::WriteSceneDocument;
 
 namespace {
 
@@ -165,4 +168,65 @@ TEST_CASE("A Prefab that failed to load is not IsLoaded()") {
     Prefab prefab;
     CHECK_FALSE(prefab.Load("this_prefab_does_not_exist.json"));
     CHECK_FALSE(prefab.IsLoaded());
+}
+
+TEST_CASE("ExtractEntityDescs/WriteSceneDocument round-trip preserves transform/mesh/collider, "
+          "drops rigidbody") {
+    ScopedTempFile sourceFile("scene_extract_source.tmp.json", kTwoEntityScene);
+    World world;
+    REQUIRE(LoadScene(sourceFile.m_path, world));
+
+    const std::vector<EntityDesc> extracted = ExtractEntityDescs(world);
+    REQUIRE(extracted.size() == 2);
+
+    ScopedTempFile outputFile("scene_extract_output.tmp.json", "");
+    REQUIRE(WriteSceneDocument(outputFile.m_path, extracted));
+
+    std::vector<EntityDesc> reloaded;
+    REQUIRE(ParseSceneDocument(outputFile.m_path, reloaded));
+    REQUIRE(reloaded.size() == 2);
+
+    const EntityDesc& first = reloaded[0];
+    CHECK(first.position == glm::vec3(1.0f, 2.0f, 3.0f));
+    CHECK(first.scale == glm::vec3(2.0f, 2.0f, 2.0f));
+    REQUIRE(first.hasMesh);
+    CHECK(first.meshBoundsRadius == doctest::Approx(0.87f));
+    REQUIRE(first.hasCollider);
+    CHECK(first.colliderShape == ColliderComponent::ShapeType::Box);
+    CHECK(first.colliderHalfExtents == glm::vec3(0.5f));
+    // The source document's first entity has a "rigidbody" block, but
+    // RigidbodyComponent doesn't store isStatic (see SceneDocument.h's own comment) --
+    // ExtractEntityDescs can't recover it, so it's correctly absent after the round-trip
+    // rather than silently wrong.
+    CHECK_FALSE(first.hasRigidbody);
+
+    const EntityDesc& second = reloaded[1];
+    CHECK_FALSE(second.hasMesh);
+    REQUIRE(second.hasCollider);
+    CHECK(second.colliderShape == ColliderComponent::ShapeType::Sphere);
+    CHECK(second.colliderRadius == doctest::Approx(1.5f));
+    CHECK(second.colliderIsTrigger);
+}
+
+TEST_CASE("SaveScene persists a live edit made after LoadScene") {
+    ScopedTempFile file("scene_save_roundtrip.tmp.json", kTwoEntityScene);
+
+    World world;
+    REQUIRE(LoadScene(file.m_path, world));
+
+    TransformComponent* transform = world.GetTransform(world.Transforms().Entities()[0]);
+    REQUIRE(transform != nullptr);
+    transform->position = glm::vec3(42.0f, 0.0f, 0.0f); // simulates an Inspector edit (E3)
+
+    REQUIRE(SaveScene(file.m_path, world));
+
+    std::vector<EntityDesc> reloaded;
+    REQUIRE(ParseSceneDocument(file.m_path, reloaded));
+    REQUIRE(reloaded.size() == 2);
+    CHECK(reloaded[0].position == glm::vec3(42.0f, 0.0f, 0.0f));
+}
+
+TEST_CASE("WriteSceneDocument rejects an unwritable path") {
+    const std::vector<EntityDesc> entities(1);
+    CHECK_FALSE(WriteSceneDocument("/this/directory/does/not/exist/scene.json", entities));
 }

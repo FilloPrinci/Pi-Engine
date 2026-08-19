@@ -1,0 +1,11 @@
+{
+  "_comment": "M7 -- Scene/Prefab (docs/01 section 12.2). \"guid\" below is assets/m1_cube.glb's actual, committed Asset GUID (see assets/m1_cube.glb.meta) -- stable because tools/cooker always reuses the sidecar instead of generating a new one.",
+  "entities": [
+    {
+      "transform": { "position": [0.0, -0.25, 0.0], "scale": [20.0, 0.5, 20.0] },
+      "mesh": { "guid": "93cc3b21eea2afab867b7761cc25c1f3", "boundsRadius": 14.14 },
+      "collider": { "shape": "box", "halfExtents": [10.0, 0.25, 10.0] },
+      "rigidbody": { "isStatic": true }
+    }
+  ]
+}

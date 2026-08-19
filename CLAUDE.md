@@ -62,7 +62,7 @@ No script reads/writes physics data while the solver is working on it — guaran
 
 - **Language: ALWAYS English** — code, comments, logs, error messages, Editor text. No exceptions, including the design/analysis documents in `docs/` (originally written in Italian, translated to English on 2026-08-18).
 - Classes/types: `PascalCase`. Public methods: `PascalCase` (`OnUpdate`, `GetComponent`). Private members: `m_camelCase`. Files: `snake_case`.
-- Namespace: `engine::<module>` (`engine::rhi`, `engine::ecs`, `engine::jobs`, `engine::renderer`, `engine::script`, `engine::physics`, `engine::platform`, `engine::asset`).
+- Namespace: `engine::<module>` (`engine::rhi`, `engine::ecs`, `engine::jobs`, `engine::renderer`, `engine::script`, `engine::physics`, `engine::platform`, `engine::asset`, `engine::scene`).
 - **No C++ exceptions in hot-path code** (renderer, physics, job system) — return code/bool + out param, `ENGINE_ASSERT` macro. Exceptions allowed only in the Cooker/offline tooling.
 - Standard `std::` for the M0-M5 MVP — no premature custom allocators.
 - A single `.clang-format` at the root (LLVM base, 4 spaces, column 100).
@@ -77,12 +77,13 @@ Pi-Engine/
 │   ├── toolchains/aarch64-linux-gnu.cmake
 │   └── CompilerWarnings.cmake
 ├── engine/
-│   ├── include/engine/{core,platform,rhi,ecs,jobs,renderer,script,physics,asset}/
+│   ├── include/engine/{core,platform,rhi,ecs,jobs,renderer,script,physics,asset,scene}/
 │   └── src/                    # same structure as include/
 ├── tests/                      # doctest — ECS, math, Job System
 ├── samples/
 │   ├── m0_hello_vulkan/  m1_hello_mesh/  m2_hello_scene/
 │   ├── m3_hello_script/  m4_hello_physics/  m5_vertical_slice/
+│   ├── m7_scene_and_prefab/    # post-vertical-slice Asset Pipeline step (M7 2/5)
 ├── tools/
 │   └── cooker/                 # offline Asset Cooker CLI (M6, docs/01 section 12.4)
 ├── assets/                     # raw source assets (docs/01 section 12.1)
@@ -103,7 +104,7 @@ Pi-Engine/
 | miniaudio | Audio | vendored (single header) |
 | Dear ImGui | Debug overlay | vcpkg |
 | doctest | Unit testing | vcpkg |
-| nlohmann-json | Asset sidecar (`.meta`)/manifest/scene serialization | vcpkg (header-only), `tools/cooker` only through M7 |
+| nlohmann-json | Asset sidecar (`.meta`)/scene+prefab serialization | vcpkg (header-only); `tools/cooker` (sidecar) and `engine_core`'s `scene/` module (scene/prefab JSON, read at runtime) |
 
 ## 8. Milestone roadmap (current project status)
 

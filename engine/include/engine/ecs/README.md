@@ -8,6 +8,9 @@
 - `World.h` + `.cpp` -- done (M2): entity lifetime (create/destroy, generation
   invalidation, index recycling) + Transform/Mesh component storage.
 - `components/TransformComponent.h`, `components/MeshComponent.h` -- done (M2).
+  `MeshComponent` gains `meshGuid` in M7 (docs/01 section 12.3, `engine/asset/AssetGuid.h`)
+  -- which cooked mesh a `scene/`-spawned entity renders, defaulted to
+  `asset::kInvalidAssetGuid` so every M0-M6 sample (which never sets it) is unaffected.
 - `components/RigidbodyComponent.h`, `components/ColliderComponent.h` -- done (M4).
   `RigidbodyComponent` stores a packed `uint32` body id, not a `JPH::BodyID`, so this file
   (included transitively by every `World.h` consumer) never pulls Jolt's headers in --

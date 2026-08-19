@@ -68,6 +68,9 @@ add_library(engine_core STATIC
     src/rhi/RHIPipeline.cpp
     src/rhi/RHISwapchain.cpp
     src/rhi/VmaImplementation.cpp
+    src/scene/Prefab.cpp
+    src/scene/Scene.cpp
+    src/scene/SceneDocument.cpp
     src/script/ScriptRegistry.cpp
     $<TARGET_OBJECTS:engine_physics_jolt>
 )
@@ -113,6 +116,7 @@ find_package(VulkanMemoryAllocator CONFIG REQUIRED)     # rhi/RHIBuffer (M1, doc
 find_package(SDL2 CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)                       # core/Camera (M1, docs/03 section 6)
 find_package(Threads REQUIRED)                          # jobs/JobSystem (M2, docs/01 section 9.3)
+find_package(nlohmann_json CONFIG REQUIRED)             # scene/SceneDocument (M7, docs/01 section 12.2)
 
 target_link_libraries(engine_core
     PUBLIC
@@ -123,6 +127,13 @@ target_link_libraries(engine_core
         # PUBLIC: SDL2DisplayBackend.h is part of engine_core's public API, so anything
         # linking engine_core (the samples) needs SDL2's headers/libs transitively too.
         $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
+        # PRIVATE would be more accurate (nlohmann::json never appears in a public engine
+        # header, see scene/SceneDocument.h's own comment) but this is a pure INTERFACE
+        # (header-only) target with no compile options of its own to leak (confirmed by
+        # reading its vcpkg-generated Config.cmake -- unlike Jolt's, see
+        # engine_physics_jolt's comment above), so PUBLIC vs PRIVATE has no real
+        # consequence here; kept PUBLIC for consistency with the rest of this list.
+        nlohmann_json::nlohmann_json
 )
 
 # TODO(M2): find_package(imgui CONFIG REQUIRED) — debug overlay (docs/01 section 4, module 4).

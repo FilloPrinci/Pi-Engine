@@ -1,0 +1,10 @@
+{
+  "_comment": "M7 -- Prefab (docs/01 section 13). A single dynamic cube; samples/m7_scene_and_prefab instantiates this three times at different positions to show one prefab producing several independent, physically-simulated entities.",
+  "entities": [
+    {
+      "mesh": { "guid": "93cc3b21eea2afab867b7761cc25c1f3", "boundsRadius": 0.8660254 },
+      "collider": { "shape": "box", "halfExtents": [0.5, 0.5, 0.5] },
+      "rigidbody": { "isStatic": false, "mass": 1.0 }
+    }
+  ]
+}

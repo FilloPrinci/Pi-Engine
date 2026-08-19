@@ -1,14 +1,13 @@
 #pragma once
 
+#include "engine/asset/AssetGuid.h"
+
 #include <glm/glm.hpp>
 
 namespace engine::ecs {
 
 // M2 scope (docs/03 section 7): marks an entity as a renderable mesh instance and carries
-// just enough data for frustum culling. No per-entity mesh/material *asset* reference yet
-// -- there's no Resource Manager to reference into (deferred, docs/01 section 4/12), so
-// M2's sample points every MeshComponent at the one shared cube mesh/GPU buffers it loads
-// once at startup. A real per-entity mesh reference is Resource Manager work, later.
+// just enough data for frustum culling.
 struct MeshComponent {
     // Local-space bounding sphere, tested against the view frustum after being
     // transformed by the entity's TransformComponent (renderer/FrustumCuller.h).
@@ -19,6 +18,15 @@ struct MeshComponent {
     // draw. Not synchronized with anything else -- safe because Cull() runs to completion
     // (Job System barrier) before any code reads it (docs/01 section 9.4 barrier pattern).
     bool visible = false;
+
+    // Which cooked mesh this entity renders (M7, docs/01 section 12.3) -- still not a real
+    // Resource Manager reference (deferred, docs/01 section 4/12): a scene/prefab-spawned
+    // entity's meshGuid is just a lookup key into whatever small per-sample mesh cache
+    // resolves GUIDs to already-uploaded GPU buffers (see samples/m7_scene_and_prefab).
+    // Defaults to kInvalidAssetGuid -- every M0-M6 sample still points every entity at the
+    // one shared cube mesh/GPU buffers it loads once at startup, completely unaffected by
+    // this field's existence.
+    asset::AssetGuid meshGuid = asset::kInvalidAssetGuid;
 };
 
 } // namespace engine::ecs

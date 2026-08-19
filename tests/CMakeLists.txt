@@ -9,6 +9,7 @@ add_executable(engine_tests
     math/CameraTests.cpp
     platform/InputSystemTests.cpp
     renderer/CookedMeshTests.cpp
+    scene/SceneDocumentTests.cpp
     script/ComponentHandleTests.cpp
     script/ScriptRegistryTests.cpp
 )
@@ -28,4 +29,7 @@ add_test(NAME engine_tests COMMAND engine_tests)
 # run).
 # tests/asset/ (M7) — AssetGuid generation (distinctness), string round-trip, malformed
 # input rejection.
+# tests/scene/ (M7) — ParseSceneDocument field extraction + malformed-input rejection,
+# SpawnEntities/LoadScene/Prefab::Instantiate against a plain World with no PhysicsWorld
+# (a real one needs Jolt -- only exercised through samples/m7_scene_and_prefab).
 # All of the above run on desktop x86_64, no Pi hardware needed.

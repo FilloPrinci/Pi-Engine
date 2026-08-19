@@ -124,19 +124,23 @@ Primary goal: **minimal vertical slice** — move a cube with the keyboard, jump
 | M4 | Hello Physics — cube falls and stops | Jolt↔JobSystem adapter, barriers respected, fixed timestep | ✅ Verified on Linux desktop and physical Pi4 hardware |
 | M5 | **Vertical Slice** — jump + collision via script | Everything together, same frame, no race conditions | ✅ Verified on Linux desktop and physical Pi4 hardware |
 | M6 | Minimal Asset Cooker — meshes cooked offline, no cgltf at runtime | `tools/cooker` CLI + `renderer/CookedMesh`, every sample loads the cooked output | ✅ Verified on Linux desktop and physical Pi4 hardware |
+| M7 | Asset Pipeline — Asset GUID, Scene/Prefab, Shader cooking, Textures, LOD generation (5 parts) | `tools/cooker` gained `shader`/`texture` subcommands and LOD generation (`meshoptimizer`); `engine::scene` (JSON, read at runtime); every asset GUID-tagged via `.meta` sidecars | ✅ Verified on Linux desktop and physical Pi4 hardware (all 5 parts) |
 
 M0-M5 is the initial roadmap from docs/02 (the vertical slice); M6 onward is
 post-vertical-slice work (docs/02 section 6), picked one at a time rather than planned as
 a fixed sequence up front.
 
 **Preliminary decisions to avoid getting stuck:**
-- Editor: out of this roadmap, built after the core is stable.
-- Asset Cooker: minimal version done (M6) — meshes only, no textures/audio/shaders/scenes,
-  no LOD/per-hardware-profile output/Asset GUID yet (docs/01 section 12.2 describes the
-  fuller version). `tools/cooker`'s own README lists exactly what's deferred and why.
-- `SDL2DisplayBackend` only through M6 so far — `DirectDRMDisplayBackend` comes later, didn't block the vertical slice.
+- Editor: started — staged roadmap in `docs/06-editor-roadmap.md` (breaks the full v1
+  vision from docs/01 section 6 into incremental steps E1-E8, same discipline as M0-M7).
+- Asset Cooker: full M7 scope done — meshes (with LOD), shaders, textures, all GUID-tagged.
+  Still no per-hardware-profile output (no Hardware Profile System built yet), no
+  mipmaps/block texture compression, no audio/scene cooking (scenes stay raw JSON by
+  design, see `engine/scene/README.md`). `tools/cooker`'s own README lists exactly what's
+  deferred and why.
+- `SDL2DisplayBackend` only through M7 so far — `DirectDRMDisplayBackend` comes later, didn't block the vertical slice.
 
-**Explicitly out of scope for M0-M5** (already designed, some started in M6+): Audio, gamepad, LOD, bloom/post-processing, PBR profile, Prefab, full Asset Pipeline/Cooker (a minimal, mesh-only slice exists from M6), Editor, Networking.
+**Explicitly out of scope still** (already designed in docs/01, not started): Audio (deferred at the user's request — not currently testable), gamepad, bloom/post-processing, PBR profile, per-hardware-profile output (Hardware Profile System), Networking.
 
 For the exact list of files/classes to create in each milestone: `docs/03-technical-analysis-claude-code.md` (sections 5-10).
 
@@ -156,3 +160,4 @@ For the exact list of files/classes to create in each milestone: `docs/03-techni
 - **Why** behind every architectural choice (hardware, TBDR rendering, physics, audio, input, Editor/Script System, Asset Pipeline, Prefab): `docs/01-engine-design-rpi.md`
 - **Full roadmap** and what's excluded from the vertical slice: `docs/02-mvp-roadmap-analysis.md`
 - **Exact files/classes** to create for each milestone, dependency rationale: `docs/03-technical-analysis-claude-code.md`
+- **Editor staged roadmap** (E1-E8, breaking docs/01 section 6's full v1 vision into incremental steps): `docs/06-editor-roadmap.md`

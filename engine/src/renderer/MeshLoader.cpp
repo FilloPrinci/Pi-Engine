@@ -35,12 +35,15 @@ bool LoadMesh(const char* path, MeshData& outMesh) {
 
     const cgltf_accessor* positionAccessor = nullptr;
     const cgltf_accessor* normalAccessor = nullptr;
+    const cgltf_accessor* uvAccessor = nullptr;
     for (cgltf_size i = 0; i < primitive.attributes_count; ++i) {
         const cgltf_attribute& attribute = primitive.attributes[i];
         if (attribute.type == cgltf_attribute_type_position) {
             positionAccessor = attribute.data;
         } else if (attribute.type == cgltf_attribute_type_normal) {
             normalAccessor = attribute.data;
+        } else if (attribute.type == cgltf_attribute_type_texcoord && attribute.index == 0) {
+            uvAccessor = attribute.data; // TEXCOORD_0 specifically -- ignore TEXCOORD_1+.
         }
     }
 
@@ -63,6 +66,14 @@ bool LoadMesh(const char* path, MeshData& outMesh) {
             outMesh.vertices[i].normal = glm::vec3(normal[0], normal[1], normal[2]);
         } else {
             outMesh.vertices[i].normal = glm::vec3(0.0f, 1.0f, 0.0f);
+        }
+
+        if (uvAccessor != nullptr) {
+            float uv[2] = {0.0f, 0.0f};
+            cgltf_accessor_read_float(uvAccessor, i, uv, 2);
+            outMesh.vertices[i].uv = glm::vec2(uv[0], uv[1]);
+        } else {
+            outMesh.vertices[i].uv = glm::vec2(0.0f, 0.0f);
         }
     }
 

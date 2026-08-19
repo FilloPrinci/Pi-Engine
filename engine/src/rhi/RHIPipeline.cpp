@@ -136,13 +136,35 @@ bool RHIPipeline::Init(RHIContext& context, const RHIPipelineDesc& desc) {
     colorBlending.attachmentCount = 1;
     colorBlending.pAttachments = &colorBlendAttachment;
 
+    if (!desc.descriptorSetLayoutBindings.empty()) {
+        VkDescriptorSetLayoutCreateInfo setLayoutInfo{};
+        setLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        setLayoutInfo.bindingCount =
+            static_cast<std::uint32_t>(desc.descriptorSetLayoutBindings.size());
+        setLayoutInfo.pBindings = desc.descriptorSetLayoutBindings.data();
+
+        if (vkCreateDescriptorSetLayout(device, &setLayoutInfo, nullptr, &m_descriptorSetLayout) !=
+            VK_SUCCESS) {
+            std::fprintf(stderr, "RHIPipeline: vkCreateDescriptorSetLayout failed\n");
+            vkDestroyShaderModule(device, vertModule, nullptr);
+            vkDestroyShaderModule(device, fragModule, nullptr);
+            return false;
+        }
+    }
+
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = m_descriptorSetLayout != VK_NULL_HANDLE ? 1 : 0;
+    layoutInfo.pSetLayouts = &m_descriptorSetLayout;
     layoutInfo.pushConstantRangeCount = static_cast<std::uint32_t>(desc.pushConstantRanges.size());
     layoutInfo.pPushConstantRanges = desc.pushConstantRanges.data();
 
     if (vkCreatePipelineLayout(device, &layoutInfo, nullptr, &m_layout) != VK_SUCCESS) {
         std::fprintf(stderr, "RHIPipeline: vkCreatePipelineLayout failed\n");
+        if (m_descriptorSetLayout != VK_NULL_HANDLE) {
+            vkDestroyDescriptorSetLayout(device, m_descriptorSetLayout, nullptr);
+            m_descriptorSetLayout = VK_NULL_HANDLE;
+        }
         vkDestroyShaderModule(device, vertModule, nullptr);
         vkDestroyShaderModule(device, fragModule, nullptr);
         return false;
@@ -174,6 +196,10 @@ bool RHIPipeline::Init(RHIContext& context, const RHIPipelineDesc& desc) {
         std::fprintf(stderr, "RHIPipeline: vkCreateGraphicsPipelines failed\n");
         vkDestroyPipelineLayout(device, m_layout, nullptr);
         m_layout = VK_NULL_HANDLE;
+        if (m_descriptorSetLayout != VK_NULL_HANDLE) {
+            vkDestroyDescriptorSetLayout(device, m_descriptorSetLayout, nullptr);
+            m_descriptorSetLayout = VK_NULL_HANDLE;
+        }
         return false;
     }
 
@@ -192,6 +218,10 @@ void RHIPipeline::Shutdown() {
     if (m_layout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(device, m_layout, nullptr);
         m_layout = VK_NULL_HANDLE;
+    }
+    if (m_descriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, m_descriptorSetLayout, nullptr);
+        m_descriptorSetLayout = VK_NULL_HANDLE;
     }
     m_context = nullptr;
 }

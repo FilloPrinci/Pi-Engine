@@ -9,6 +9,7 @@ add_executable(engine_tests
     math/CameraTests.cpp
     platform/InputSystemTests.cpp
     renderer/CookedMeshTests.cpp
+    renderer/CookedTextureTests.cpp
     scene/SceneDocumentTests.cpp
     script/ComponentHandleTests.cpp
     script/ScriptRegistryTests.cpp

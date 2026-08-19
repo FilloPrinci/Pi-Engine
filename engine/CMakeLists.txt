@@ -60,13 +60,16 @@ add_library(engine_core STATIC
     src/platform/InputSystem.cpp
     src/platform/SDL2DisplayBackend.cpp
     src/renderer/CookedMesh.cpp
+    src/renderer/CookedTexture.cpp
     src/renderer/ForwardLitPipeline.cpp
+    src/renderer/ForwardLitTexturedPipeline.cpp
     src/renderer/FrustumCuller.cpp
     src/renderer/MeshLoader.cpp
     src/rhi/RHIBuffer.cpp
     src/rhi/RHIContext.cpp
     src/rhi/RHIPipeline.cpp
     src/rhi/RHISwapchain.cpp
+    src/rhi/RHITexture.cpp
     src/rhi/VmaImplementation.cpp
     src/scene/Prefab.cpp
     src/scene/Scene.cpp

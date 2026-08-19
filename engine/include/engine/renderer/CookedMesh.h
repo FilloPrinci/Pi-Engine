@@ -34,7 +34,7 @@ struct CookedMeshHeader {
 };
 
 inline constexpr char kCookedMeshMagic[4] = {'P', 'I', 'C', 'M'};
-inline constexpr std::uint32_t kCookedMeshVersion = 2; // 2: header grew guidHigh/guidLow (M7)
+inline constexpr std::uint32_t kCookedMeshVersion = 3; // 2: guidHigh/guidLow: 3: Vertex grew uv (M7)
 
 // Writes `mesh` (tagged with its source asset's `guid`, docs/01 section 12.3) to `path` in
 // the format above. Offline-tooling code (tools/cooker) -- never called at runtime by the

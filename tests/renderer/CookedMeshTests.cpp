@@ -29,9 +29,9 @@ TEST_CASE("WriteCookedMesh/LoadCookedMesh round-trip preserves vertices, indices
 
     MeshData original;
     original.vertices = {
-        Vertex{glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f)},
-        Vertex{glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f)},
-        Vertex{glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f)},
+        Vertex{glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.0f, 0.0f)},
+        Vertex{glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(1.0f, 0.0f)},
+        Vertex{glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(0.0f, 1.0f)},
     };
     original.indices = {0, 1, 2};
     const AssetGuid guid = GenerateAssetGuid();
@@ -47,6 +47,7 @@ TEST_CASE("WriteCookedMesh/LoadCookedMesh round-trip preserves vertices, indices
     for (std::size_t i = 0; i < original.vertices.size(); ++i) {
         CHECK(loaded.vertices[i].position == original.vertices[i].position);
         CHECK(loaded.vertices[i].normal == original.vertices[i].normal);
+        CHECK(loaded.vertices[i].uv == original.vertices[i].uv);
     }
     CHECK(loaded.indices == original.indices);
 }

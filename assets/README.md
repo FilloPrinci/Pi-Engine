@@ -15,6 +15,14 @@ see `engine/include/engine/renderer/README.md`.
   source and committed alongside it from then on (unlike `assets_cooked/`, a `.meta` file
   *is* checked into git -- it's what makes the id survive the source file being renamed or
   moved). Never edited by hand.
+- `m7_quad.gltf` (+ `.meta`) — done (M7, textures step): a hand-authored quad (4 vertices,
+  2 triangles) with POSITION+NORMAL+TEXCOORD_0, embedded as a base64 data-URI buffer
+  (plain JSON text, no external `.bin`) -- `m1_cube.glb` predates TEXCOORD_0 support and
+  wasn't worth regenerating without a DCC tool in the loop. Used only by
+  `samples/m7_textures`.
+- `m7_checker.png` (+ `.meta`) — done (M7, textures step): a small (64x64) hand-generated
+  RGBA checkerboard, test input for `cooker texture` / `samples/m7_textures` -- visually
+  confirms UV mapping/sampling orientation at a glance. Not art, just a debug pattern.
 
 Everything here stays git-friendly source (glTF/GLB, PNG/TGA, WAV, `.meta` sidecars) — no
 cooked/compressed binaries belong in this repo (`assets_cooked/` is gitignored, generated

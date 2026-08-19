@@ -84,10 +84,11 @@ Pi-Engine/
 │   ├── m0_hello_vulkan/  m1_hello_mesh/  m2_hello_scene/
 │   ├── m3_hello_script/  m4_hello_physics/  m5_vertical_slice/
 │   ├── m7_scene_and_prefab/    # post-vertical-slice Asset Pipeline step (M7 2/5)
+│   ├── m7_textures/            # post-vertical-slice Asset Pipeline step (M7 4/5)
 ├── tools/
 │   └── cooker/                 # offline Asset Cooker CLI (M6, docs/01 section 12.4)
 ├── assets/                     # raw source assets (docs/01 section 12.1)
-├── shaders/                    # GLSL → SPIR-V at build time
+├── shaders/                    # GLSL sources, compiled to SPIR-V by the Cooker
 └── docs/                       # design/analysis documents
 ```
 
@@ -100,6 +101,7 @@ Pi-Engine/
 | SDL2 | Platform Layer + gamepad | vcpkg |
 | GLM | Math | vcpkg (header-only) |
 | cgltf | glTF loader | vendored (single header) |
+| stb_image | PNG decoding (`cooker texture`) | vendored (single header), `tools/cooker` only |
 | Jolt Physics | Physics | vcpkg |
 | miniaudio | Audio | vendored (single header) |
 | Dear ImGui | Debug overlay | vcpkg |

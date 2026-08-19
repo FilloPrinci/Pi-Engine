@@ -5,11 +5,12 @@
 
 namespace engine::renderer {
 
-static_assert(sizeof(Vertex) == 2 * sizeof(glm::vec3),
-              "CookedMesh format assumes a tightly packed Vertex{vec3 position; vec3 normal;} "
-              "with no padding between them -- true for every compiler/target this project "
-              "builds for, but WriteCookedMesh/LoadCookedMesh would need a real per-field "
-              "serialization if that ever changed.");
+static_assert(sizeof(Vertex) == 2 * sizeof(glm::vec3) + sizeof(glm::vec2),
+              "CookedMesh format assumes a tightly packed "
+              "Vertex{vec3 position; vec3 normal; vec2 uv;} with no padding between them -- "
+              "true for every compiler/target this project builds for, but "
+              "WriteCookedMesh/LoadCookedMesh would need a real per-field serialization if "
+              "that ever changed.");
 
 bool WriteCookedMesh(const char* path, const asset::AssetGuid& guid, const MeshData& mesh) {
     std::FILE* file = std::fopen(path, "wb");

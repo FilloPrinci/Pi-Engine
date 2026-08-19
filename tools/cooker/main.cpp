@@ -1,5 +1,6 @@
 #include "CookMesh.h"
 #include "CookShader.h"
+#include "CookTexture.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -13,19 +14,20 @@
 // sources (see tools/cooker/CMakeLists.txt), reusing that code without pulling in
 // anything the engine's rendering/physics/platform layers need.
 //
-// Two subcommands so far (M6/M7): `mesh` (glTF/GLB -> engine/renderer/CookedMesh.h's
-// binary format, tagged with a persistent Asset GUID, docs/01 section 12.3) and `shader`
-// (GLSL -> SPIR-V via shaderc, replacing every sample's own glslc invocation). Textures/
-// scenes are still out of scope for this tool -- scenes stay raw JSON even after M7 (see
-// engine/scene/README.md), and there's no texture pipeline built yet at all.
+// Three subcommands so far (M6/M7): `mesh` (glTF/GLB -> engine/renderer/CookedMesh.h's
+// binary format, tagged with a persistent Asset GUID, docs/01 section 12.3), `shader`
+// (GLSL -> SPIR-V via shaderc, replacing every sample's own glslc invocation), and
+// `texture` (PNG -> engine/renderer/CookedTexture.h's binary format via stb_image).
+// Scenes are still out of scope for this tool -- they stay raw JSON even after M7 (see
+// engine/scene/README.md).
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: cooker <mesh|shader> <input> <output>\n");
+        std::fprintf(stderr, "usage: cooker <mesh|shader|texture> <input> <output>\n");
         return EXIT_FAILURE;
     }
 
     const char* command = argv[1];
-    // Shift argv so each Cook*() sees argv[0]="mesh"/"shader", argv[1]=input,
+    // Shift argv so each Cook*() sees argv[0]="mesh"/"shader"/"texture", argv[1]=input,
     // argv[2]=output -- same argc/argv shape main() itself gets, just one level in.
     if (std::strcmp(command, "mesh") == 0) {
         return CookMesh(argc - 1, argv + 1);
@@ -33,8 +35,13 @@ int main(int argc, char** argv) {
     if (std::strcmp(command, "shader") == 0) {
         return CookShader(argc - 1, argv + 1);
     }
+    if (std::strcmp(command, "texture") == 0) {
+        return CookTexture(argc - 1, argv + 1);
+    }
 
-    std::fprintf(stderr, "cooker: unknown subcommand \"%s\" (expected \"mesh\" or \"shader\")\n",
+    std::fprintf(stderr,
+                 "cooker: unknown subcommand \"%s\" (expected \"mesh\", \"shader\", or "
+                 "\"texture\")\n",
                  command);
     return EXIT_FAILURE;
 }

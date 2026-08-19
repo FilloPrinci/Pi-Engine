@@ -48,6 +48,12 @@ public:
     // has no SDL_Window at all).
     SDL_Window* GetSDLWindow() const { return m_window; }
 
+    // Also not part of IDisplayBackend -- lets application code (e.g. the Editor's
+    // Project Hub, step E7) end the frame loop on its own terms instead of only via a
+    // real window-close event. The next PollEvents() call reports quitRequested = true,
+    // same as if the user had closed the window.
+    void RequestQuit() { m_shouldQuit = true; }
+
 private:
     SDL_Window* m_window = nullptr;
     bool m_shouldQuit = false;

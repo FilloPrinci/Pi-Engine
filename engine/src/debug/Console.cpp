@@ -66,6 +66,21 @@ bool Console::Init() {
 }
 
 void Console::Shutdown() {
+    // Final drain before restoring the real fds -- Update() may never have run (e.g. main()
+    // hit an early `return EXIT_FAILURE` before the frame loop, and its onUpdate callback,
+    // ever started), in which case whatever was printed is still sitting undrained in the
+    // pipe. Without this, that output would be silently lost instead of teed to the
+    // original terminal/log file -- exactly the diagnostic output an early-failure path
+    // most needs to actually reach the user. Explicit fflush() first: even line-buffered
+    // stdio can still be holding a partial (no trailing newline yet) line that was never
+    // actually write()'d to the pipe.
+    if (m_initialized) {
+        std::fflush(stdout);
+        std::fflush(stderr);
+        DrainStream(m_stdoutPipeRead, m_stdoutOriginalFd, m_stdoutPartialLine, false);
+        DrainStream(m_stderrPipeRead, m_stderrOriginalFd, m_stderrPartialLine, true);
+    }
+
     if (m_stdoutOriginalFd >= 0) {
         dup2(m_stdoutOriginalFd, STDOUT_FILENO);
         close(m_stdoutOriginalFd);

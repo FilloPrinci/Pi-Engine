@@ -4,7 +4,7 @@
 # links engine_core fully: it needs the real ECS/RHI/renderer/scene loader to show a Scene
 # View, not just offline conversion code.
 
-add_executable(editor main.cpp)
+add_executable(editor main.cpp ProjectHub.cpp)
 target_link_libraries(editor PRIVATE engine_core)
 pi_engine_set_warnings(editor)
 

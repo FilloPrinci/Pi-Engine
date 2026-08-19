@@ -28,17 +28,20 @@ parsing source assets at runtime (see [`samples/`](samples/)).
 section 6 broken into incremental steps E1-E8). **E1 — ImGui-Vulkan integration** is done
 (`engine::debug::ImGuiOverlay`, see [`samples/e1_imgui_overlay`](samples/e1_imgui_overlay));
 **E2 — app skeleton + Scene View**, **E3 — Inspector panel + entity selection**,
-**E4 — Scene saving**, **E5 — Console panel**, and **E6 — Asset Browser** are done too:
-[`editor/`](editor/) is a real separate application linking `engine_core`, loading a
-`.scene.json` and rendering it with a keyboard-navigable camera (A/D yaw, W/S pitch,
-Up/Down zoom); clicking an entity in the Scene panel selects it and shows its
-Transform/Mesh/Collider in an Inspector panel, editable live — dragging or typing a new
-value moves/resizes the object in the Scene View immediately; a "Save" button writes the
-edited state back to the same `.scene.json`, round-tripping through the existing scene
-format with no new format invented; a Console panel captures the engine's existing
+**E4 — Scene saving**, **E5 — Console panel**, **E6 — Asset Browser**, and
+**E7 — Project Hub** are done too: [`editor/`](editor/) is a real separate application
+linking `engine_core`, loading a `.scene.json` and rendering it with a keyboard-navigable
+camera (A/D yaw, W/S pitch, Up/Down zoom); clicking an entity in the Scene panel selects it
+and shows its Transform/Mesh/Collider in an Inspector panel, editable live — dragging or
+typing a new value moves/resizes the object in the Scene View immediately; a "Save" button
+writes the edited state back to the same `.scene.json`, round-tripping through the existing
+scene format with no new format invented; a Console panel captures the engine's existing
 stdout/stderr output live (errors highlighted red), still teed to the launching terminal
 too; an Asset Browser lists `assets/` and the Cooker's output side by side, showing a
-selected source asset's persistent GUID.
+selected source asset's persistent GUID; a Project Hub panel remembers every scene the
+Editor has opened and relaunches into a different one on click (`fork()`+`execv()`, one
+process per open project/scene, the same way Unity Hub and the Unity Editor are actually
+separate processes).
 
 ## Prerequisites
 
@@ -134,7 +137,7 @@ Details: `CLAUDE.md` section 8, [`docs/02-mvp-roadmap-analysis.md`](docs/02-mvp-
 | E4 | Scene saving | Verified on Linux desktop and physical Pi4 hardware |
 | E5 | Console panel | Verified on Linux desktop and physical Pi4 hardware |
 | E6 | Asset Browser (minimal) | Verified on Linux desktop and physical Pi4 hardware |
-| E7 | Project Hub | Not started |
+| E7 | Project Hub | Verified on Linux desktop and physical Pi4 hardware |
 | E8 | Build/Play/Debug pipeline | Not started |
 
 Details: [`docs/06-editor-roadmap.md`](docs/06-editor-roadmap.md).

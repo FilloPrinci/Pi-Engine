@@ -1,3 +1,5 @@
+#include "ProjectHub.h"
+
 #include "engine/asset/AssetGuid.h"
 #include "engine/asset/AssetMeta.h"
 #include "engine/core/Application.h"
@@ -203,6 +205,7 @@ int main(int argc, char** argv) {
     }
     std::printf("editor: loaded scene \"%s\" (%zu mesh entities)\n", scenePath.c_str(),
                 world.Meshes().Data().size());
+    RecordRecentProject(scenePath); // Editor step E7 -- Project Hub's recent-scenes list.
 
     // --- Asset Browser listing (Editor step E6) -- read once at startup, see
     //     ListDirectory()'s own comment for why this isn't refreshed live. ---
@@ -210,6 +213,11 @@ int main(int argc, char** argv) {
     const std::vector<std::string> cookedAssetNames = ListDirectory(PI_ENGINE_COOKED_ASSET_DIR, false);
     const std::vector<std::string> cookedShaderNames =
         ListDirectory(std::string(PI_ENGINE_COOKED_ASSET_DIR) + "/shaders", false);
+
+    // --- Project Hub (Editor step E7) -- read once at startup like the listings above;
+    //     re-read after RelaunchWithProject() wouldn't matter anyway since this process is
+    //     about to quit once that succeeds. ---
+    const std::vector<RecentProject> recentProjects = LoadRecentProjects();
 
     // --- Depth buffer (same pattern as every sample since M1). ---
     const VkFormat depthFormat = ChooseDepthFormat(context.GetPhysicalDevice());
@@ -653,6 +661,41 @@ int main(int argc, char** argv) {
             }
             if (cookedAssetNames.empty() && cookedShaderNames.empty()) {
                 ImGui::TextDisabled("(empty)");
+            }
+        }
+        ImGui::End();
+
+        // --- Project Hub panel (Editor step E7, minimal -- see ProjectHub.h's own
+        //     comment for why this is a recent-scenes list rather than a full "shared
+        //     engine installation, multiple project directories" system). Opening a
+        //     *different* scene than the one this process already has open relaunches
+        //     the Editor pointed at it (one process per open project, same as Unity Hub
+        //     really works) instead of trying to hot-swap the running World -- nothing
+        //     else in this engine supports live-reloading either. ---
+        ImGui::SetNextWindowPos(ImVec2(1160.0f, 470.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(320.0f, 220.0f), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Project Hub");
+        if (recentProjects.empty()) {
+            ImGui::TextDisabled("(no recent scenes yet)");
+        }
+        for (const RecentProject& project : recentProjects) {
+            const bool isCurrent = project.scenePath == scenePath;
+            ImGui::BeginDisabled(isCurrent);
+            if (ImGui::Selectable(project.scenePath.c_str())) {
+                if (RelaunchWithProject(project.scenePath)) {
+                    displayBackend.RequestQuit();
+                } else {
+                    std::fprintf(stderr,
+                                 "editor: couldn't relaunch for \"%s\" -- not supported on "
+                                 "this platform, or the relaunch itself failed to start\n",
+                                 project.scenePath.c_str());
+                }
+            }
+            ImGui::EndDisabled();
+            ImGui::TextDisabled("    opened %s", project.lastOpenedUtc.c_str());
+            if (isCurrent) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(current)");
             }
         }
         ImGui::End();

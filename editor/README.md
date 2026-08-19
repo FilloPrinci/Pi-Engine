@@ -43,7 +43,7 @@ teed, not replaced: redirecting the process's own output (`editor > log.txt 2>&1
 running it interactively still works exactly as before. POSIX only (Linux/macOS) -- on
 another platform the panel just stays empty rather than failing to build or run.
 
-**Step E6 (current)**: Asset Browser (minimal). Lists `assets/` (Cooker source assets,
+**Step E6**: Asset Browser (minimal). Lists `assets/` (Cooker source assets,
 docs/01 section 12.1) and `assets_cooked/` (this build's Cooker output, including
 `shaders/`) side by side, read once at startup via `std::filesystem`. Selecting a source
 asset shows its persistent GUID via `engine::asset::TryReadAssetMetaGuid()` (the read-only
@@ -51,6 +51,18 @@ counterpart to `tools/cooker`'s `GetOrCreateAssetGuid()` -- the Editor only ever
 an existing `.meta` sidecar, never creates one) or "no `.meta` sidecar" if none exists.
 No "New Script" template generation yet -- scripting-from-editor is its own larger
 sub-feature, deferred further.
+
+**Step E7 (current)**: Project Hub (minimal -- see `ProjectHub.h`'s own comment for why
+this isn't the full "shared engine installation, multiple project directories" system
+docs/01 section 6.1 describes; that isn't buildable yet since Pi-Engine has no
+install/export target at all). Every successful scene load is recorded to a small local
+JSON file (`~/.local/share/pi-engine/recent_projects.json`); the **Project Hub** panel
+lists it, most-recently-opened first. Clicking a *different* entry than the one currently
+open relaunches the Editor pointed at it -- `fork()` + `execv()` against
+`/proc/self/exe`, then the current process requests its own quit -- one process per open
+project/scene, the same way Unity Hub and the Unity Editor are actually two separate
+processes rather than one process hot-swapping its loaded project. Linux only; on another
+platform the relaunch simply doesn't happen (logged, not fatal).
 
 Mesh resolution is a placeholder GUID → GPU-buffers cache (same pattern as
 `samples/m7_scene_and_prefab`) that only knows about `m1_cube.mesh` — a real GUID →

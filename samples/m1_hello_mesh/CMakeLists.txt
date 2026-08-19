@@ -1,5 +1,5 @@
-# GLSL -> SPIR-V at build time (docs/03 section 5), not the Cooker yet. Requires the
-# Vulkan SDK's glslc on PATH or discoverable via VULKAN_SDK (see root README.md).
+# GLSL -> SPIR-V at build time (docs/03 section 5). Requires the Vulkan SDK's glslc on
+# PATH or discoverable via VULKAN_SDK (see root README.md).
 find_program(GLSLC_EXECUTABLE
     NAMES glslc
     HINTS "$ENV{VULKAN_SDK}/bin" "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/Bin32"
@@ -38,10 +38,15 @@ add_executable(m1_hello_mesh main.cpp)
 target_link_libraries(m1_hello_mesh PRIVATE engine_core)
 pi_engine_set_warnings(m1_hello_mesh)
 add_dependencies(m1_hello_mesh m1_hello_mesh_shaders)
+# assets_cooked/m1_cube.mesh (docs/01 section 12.4, cmake/CookAssets.cmake) -- see that
+# file's comment for what happens to this dependency while cross-compiling.
+if(TARGET cooked_assets)
+    add_dependencies(m1_hello_mesh cooked_assets)
+endif()
 
-# Read back by main.cpp (ShaderPath()/AssetPath()) so the executable finds its shaders
-# and test asset regardless of the process' current working directory.
+# Read back by main.cpp (ShaderPath()/CookedAssetPath()) so the executable finds its
+# shaders and cooked mesh regardless of the process' current working directory.
 target_compile_definitions(m1_hello_mesh PRIVATE
     PI_ENGINE_SHADER_DIR="${M1_SHADER_OUTPUT_DIR}"
-    PI_ENGINE_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets"
+    PI_ENGINE_COOKED_ASSET_DIR="${PI_ENGINE_COOKED_ASSET_DIR}"
 )

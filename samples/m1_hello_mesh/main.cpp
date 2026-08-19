@@ -1,8 +1,8 @@
 #include "engine/core/Camera.h"
 #include "engine/core/EngineVersion.h"
 #include "engine/platform/SDL2DisplayBackend.h"
+#include "engine/renderer/CookedMesh.h"
 #include "engine/renderer/ForwardLitPipeline.h"
-#include "engine/renderer/MeshLoader.h"
 #include "engine/rhi/RHIBuffer.h"
 #include "engine/rhi/RHIContext.h"
 #include "engine/rhi/RHISwapchain.h"
@@ -34,8 +34,8 @@ std::string ShaderPath(const char* fileName) {
     return std::string(PI_ENGINE_SHADER_DIR) + "/" + fileName;
 }
 
-std::string AssetPath(const char* fileName) {
-    return std::string(PI_ENGINE_ASSET_DIR) + "/" + fileName;
+std::string CookedAssetPath(const char* fileName) {
+    return std::string(PI_ENGINE_COOKED_ASSET_DIR) + "/" + fileName;
 }
 
 // Picks the first candidate the physical device actually supports as an optimally-tiled
@@ -87,9 +87,9 @@ int main(int /*argc*/, char** /*argv*/) {
 
     VkDevice device = context.GetDevice();
 
-    // --- Mesh: load from glTF, upload to GPU. ---
+    // --- Mesh: load the Cooker's binary output (docs/01 section 12), upload to GPU. ---
     MeshData mesh;
-    if (!engine::renderer::LoadMesh(AssetPath("m1_cube.glb").c_str(), mesh)) {
+    if (!engine::renderer::LoadCookedMesh(CookedAssetPath("m1_cube.mesh").c_str(), mesh)) {
         return EXIT_FAILURE;
     }
     std::printf("m1_hello_mesh: loaded mesh with %zu vertices, %zu indices\n", mesh.vertices.size(),

@@ -58,6 +58,7 @@ add_library(engine_core STATIC
     src/physics/PhysicsPhase.cpp
     src/platform/InputSystem.cpp
     src/platform/SDL2DisplayBackend.cpp
+    src/renderer/CookedMesh.cpp
     src/renderer/ForwardLitPipeline.cpp
     src/renderer/FrustumCuller.cpp
     src/renderer/MeshLoader.cpp

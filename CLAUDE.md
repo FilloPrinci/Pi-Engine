@@ -83,7 +83,9 @@ Pi-Engine/
 ├── samples/
 │   ├── m0_hello_vulkan/  m1_hello_mesh/  m2_hello_scene/
 │   ├── m3_hello_script/  m4_hello_physics/  m5_vertical_slice/
-├── assets/                     # raw, no Cooker in M0-M5
+├── tools/
+│   └── cooker/                 # offline Asset Cooker CLI (M6, docs/01 section 12.4)
+├── assets/                     # raw source assets (docs/01 section 12.1)
 ├── shaders/                    # GLSL → SPIR-V at build time
 └── docs/                       # design/analysis documents
 ```
@@ -114,13 +116,20 @@ Primary goal: **minimal vertical slice** — move a cube with the keyboard, jump
 | M3 | Hello Script — object moves via keyboard | ScriptComponent/ComponentHandle/REGISTER_SCRIPT working | ✅ Verified on Linux desktop and physical Pi4 hardware |
 | M4 | Hello Physics — cube falls and stops | Jolt↔JobSystem adapter, barriers respected, fixed timestep | ✅ Verified on Linux desktop and physical Pi4 hardware |
 | M5 | **Vertical Slice** — jump + collision via script | Everything together, same frame, no race conditions | ✅ Verified on Linux desktop and physical Pi4 hardware |
+| M6 | Minimal Asset Cooker — meshes cooked offline, no cgltf at runtime | `tools/cooker` CLI + `renderer/CookedMesh`, every sample loads the cooked output | ✅ Verified on Linux desktop and physical Pi4 hardware |
+
+M0-M5 is the initial roadmap from docs/02 (the vertical slice); M6 onward is
+post-vertical-slice work (docs/02 section 6), picked one at a time rather than planned as
+a fixed sequence up front.
 
 **Preliminary decisions to avoid getting stuck:**
 - Editor: out of this roadmap, built after the core is stable.
-- Asset Cooker: deferred until after M5 — "raw" assets loaded at runtime in milestones M0-M5.
-- `SDL2DisplayBackend` only in milestones M0-M5 — `DirectDRMDisplayBackend` comes later, doesn't block the vertical slice.
+- Asset Cooker: minimal version done (M6) — meshes only, no textures/audio/shaders/scenes,
+  no LOD/per-hardware-profile output/Asset GUID yet (docs/01 section 12.2 describes the
+  fuller version). `tools/cooker`'s own README lists exactly what's deferred and why.
+- `SDL2DisplayBackend` only through M6 so far — `DirectDRMDisplayBackend` comes later, didn't block the vertical slice.
 
-**Explicitly out of scope for M0-M5** (already designed, but later): Audio, gamepad, LOD, bloom/post-processing, PBR profile, Prefab, full Asset Pipeline/Cooker, Editor, Networking.
+**Explicitly out of scope for M0-M5** (already designed, some started in M6+): Audio, gamepad, LOD, bloom/post-processing, PBR profile, Prefab, full Asset Pipeline/Cooker (a minimal, mesh-only slice exists from M6), Editor, Networking.
 
 For the exact list of files/classes to create in each milestone: `docs/03-technical-analysis-claude-code.md` (sections 5-10).
 

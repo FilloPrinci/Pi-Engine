@@ -26,6 +26,7 @@ set(PI_ENGINE_HARDWARE_PROFILE "desktop" CACHE STRING "Target hardware profile: 
 
 option(PI_ENGINE_BUILD_TESTS "Build unit tests (doctest)" ON)
 option(PI_ENGINE_BUILD_SAMPLES "Build milestone samples" ON)
+option(PI_ENGINE_BUILD_COOKER "Build the offline asset Cooker CLI tool (docs/01 section 12.4)" ON)
 
 add_subdirectory(engine)
 
@@ -33,6 +34,14 @@ if(PI_ENGINE_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
+
+# The Cooker is build-time tooling: it must run on the machine doing the build, not the
+# cross-compilation target, so it's skipped entirely while actually cross-compiling (see
+# cmake/CookAssets.cmake's own comment for what that means for samples in that case).
+if(PI_ENGINE_BUILD_COOKER AND NOT CMAKE_CROSSCOMPILING)
+    add_subdirectory(tools/cooker)
+endif()
+include(CookAssets)
 
 if(PI_ENGINE_BUILD_SAMPLES)
     add_subdirectory(samples)

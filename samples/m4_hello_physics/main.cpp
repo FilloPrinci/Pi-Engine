@@ -6,8 +6,8 @@
 #include "engine/physics/PhysicsPhase.h"
 #include "engine/physics/PhysicsWorld.h"
 #include "engine/platform/SDL2DisplayBackend.h"
+#include "engine/renderer/CookedMesh.h"
 #include "engine/renderer/ForwardLitPipeline.h"
-#include "engine/renderer/MeshLoader.h"
 #include "engine/rhi/RHIBuffer.h"
 #include "engine/rhi/RHIContext.h"
 #include "engine/rhi/RHISwapchain.h"
@@ -48,8 +48,8 @@ std::string ShaderPath(const char* fileName) {
     return std::string(PI_ENGINE_SHADER_DIR) + "/" + fileName;
 }
 
-std::string AssetPath(const char* fileName) {
-    return std::string(PI_ENGINE_ASSET_DIR) + "/" + fileName;
+std::string CookedAssetPath(const char* fileName) {
+    return std::string(PI_ENGINE_COOKED_ASSET_DIR) + "/" + fileName;
 }
 
 VkFormat ChooseDepthFormat(VkPhysicalDevice physicalDevice) {
@@ -125,7 +125,7 @@ int main(int /*argc*/, char** /*argv*/) {
     // --- Mesh: same shared cube as M1-M3, instanced (with per-entity scale) for both the
     // ground slab and the falling cube. ---
     MeshData mesh;
-    if (!engine::renderer::LoadMesh(AssetPath("m1_cube.glb").c_str(), mesh)) {
+    if (!engine::renderer::LoadCookedMesh(CookedAssetPath("m1_cube.mesh").c_str(), mesh)) {
         return EXIT_FAILURE;
     }
 

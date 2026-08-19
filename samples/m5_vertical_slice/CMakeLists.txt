@@ -1,5 +1,5 @@
-# GLSL -> SPIR-V at build time (docs/03 section 5), not the Cooker yet. Requires the
-# Vulkan SDK's glslc on PATH or discoverable via VULKAN_SDK (see root README.md).
+# GLSL -> SPIR-V at build time (docs/03 section 5). Requires the Vulkan SDK's glslc on
+# PATH or discoverable via VULKAN_SDK (see root README.md).
 # Reuses M1's unlit shader (shaders/m1_unlit.*) -- M5 doesn't need a new pipeline variant.
 find_program(GLSLC_EXECUTABLE
     NAMES glslc
@@ -45,8 +45,13 @@ add_executable(m5_vertical_slice main.cpp)
 target_link_libraries(m5_vertical_slice PRIVATE engine_core Jolt::Jolt)
 pi_engine_set_warnings(m5_vertical_slice)
 add_dependencies(m5_vertical_slice m5_vertical_slice_shaders)
+# assets_cooked/m1_cube.mesh (docs/01 section 12.4, cmake/CookAssets.cmake) -- see that
+# file's comment for what happens to this dependency while cross-compiling.
+if(TARGET cooked_assets)
+    add_dependencies(m5_vertical_slice cooked_assets)
+endif()
 
 target_compile_definitions(m5_vertical_slice PRIVATE
     PI_ENGINE_SHADER_DIR="${M5_SHADER_OUTPUT_DIR}"
-    PI_ENGINE_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets"
+    PI_ENGINE_COOKED_ASSET_DIR="${PI_ENGINE_COOKED_ASSET_DIR}"
 )

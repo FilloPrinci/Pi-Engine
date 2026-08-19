@@ -3,6 +3,7 @@ find_package(doctest CONFIG REQUIRED)
 add_executable(engine_tests
     main.cpp
     asset/AssetGuidTests.cpp
+    asset/AssetMetaTests.cpp
     core/EngineVersionTests.cpp
     ecs/WorldTests.cpp
     jobs/JobSystemTests.cpp

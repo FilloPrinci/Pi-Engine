@@ -34,7 +34,7 @@ has no `PhysicsWorld`), only for a scene document that already had one before th
 loaded it. No "Save As" yet (Editor step E7's Project Hub is the more natural place to
 manage multiple scene files).
 
-**Step E5 (current)**: Console panel. Captures the engine's existing stdout/stderr output
+**Step E5**: Console panel. Captures the engine's existing stdout/stderr output
 (`engine::debug::Console`, built this step) into a scrollable panel -- every
 `std::printf`/`std::fprintf(stderr, ...)` call site across the engine already exists and
 is captured as-is via low-level file descriptor redirection, not a new logging API
@@ -42,6 +42,15 @@ everything would need to be rewritten to use. stderr lines are highlighted red. 
 teed, not replaced: redirecting the process's own output (`editor > log.txt 2>&1`) or just
 running it interactively still works exactly as before. POSIX only (Linux/macOS) -- on
 another platform the panel just stays empty rather than failing to build or run.
+
+**Step E6 (current)**: Asset Browser (minimal). Lists `assets/` (Cooker source assets,
+docs/01 section 12.1) and `assets_cooked/` (this build's Cooker output, including
+`shaders/`) side by side, read once at startup via `std::filesystem`. Selecting a source
+asset shows its persistent GUID via `engine::asset::TryReadAssetMetaGuid()` (the read-only
+counterpart to `tools/cooker`'s `GetOrCreateAssetGuid()` -- the Editor only ever displays
+an existing `.meta` sidecar, never creates one) or "no `.meta` sidecar" if none exists.
+No "New Script" template generation yet -- scripting-from-editor is its own larger
+sub-feature, deferred further.
 
 Mesh resolution is a placeholder GUID → GPU-buffers cache (same pattern as
 `samples/m7_scene_and_prefab`) that only knows about `m1_cube.mesh` — a real GUID →

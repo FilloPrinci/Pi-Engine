@@ -50,6 +50,7 @@ endif()
 
 add_library(engine_core STATIC
     src/asset/AssetGuid.cpp
+    src/asset/AssetMeta.cpp
     src/core/Application.cpp
     src/core/Camera.cpp
     src/core/EngineVersion.cpp

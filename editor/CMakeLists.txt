@@ -21,9 +21,12 @@ endif()
 # Read back by main.cpp (ShaderPath()/CookedAssetPath()/EditorAssetPath()). editor/assets/
 # holds the Editor's own default demo scene -- not a Cooker *source* asset (assets/,
 # docs/01 section 12.1) and not one sample's throwaway content either, so it gets its own
-# directory rather than reusing either of those.
+# directory rather than reusing either of those. PI_ENGINE_ASSETS_DIR (Editor step E6's
+# Asset Browser) is the actual Cooker source directory (docs/01 section 12.1), distinct
+# from PI_ENGINE_EDITOR_ASSET_DIR above.
 target_compile_definitions(editor PRIVATE
     PI_ENGINE_SHADER_DIR="${PI_ENGINE_COOKED_SHADER_DIR}"
     PI_ENGINE_COOKED_ASSET_DIR="${PI_ENGINE_COOKED_ASSET_DIR}"
     PI_ENGINE_EDITOR_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
+    PI_ENGINE_ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets"
 )

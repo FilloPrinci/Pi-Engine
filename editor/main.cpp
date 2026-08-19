@@ -1,4 +1,5 @@
 #include "engine/asset/AssetGuid.h"
+#include "engine/asset/AssetMeta.h"
 #include "engine/core/Application.h"
 #include "engine/core/Camera.h"
 #include "engine/core/EngineVersion.h"
@@ -22,8 +23,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <vector>
 
@@ -58,6 +62,33 @@ std::string CookedAssetPath(const char* fileName) {
 
 std::string EditorAssetPath(const char* fileName) {
     return std::string(PI_ENGINE_EDITOR_ASSET_DIR) + "/" + fileName;
+}
+
+// Asset Browser (Editor step E6): filenames directly inside `dir`, sorted, one filesystem
+// read at startup -- not refreshed live (no file-watcher; the Cooker's output doesn't
+// change while the Editor is already running against it). `excludeMetaFiles` hides the
+// GUID sidecars themselves from the "Source Assets" listing -- they're metadata about an
+// asset, not an asset a scene would ever reference.
+std::vector<std::string> ListDirectory(const std::filesystem::path& dir, bool excludeMetaFiles) {
+    std::vector<std::string> names;
+    std::error_code errorCode;
+    if (!std::filesystem::exists(dir, errorCode)) {
+        return names;
+    }
+    for (const auto& entry : std::filesystem::directory_iterator(dir, errorCode)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        const std::string name = entry.path().filename().string();
+        constexpr std::string_view kMetaSuffix = ".meta";
+        if (excludeMetaFiles && name.size() >= kMetaSuffix.size() &&
+            name.compare(name.size() - kMetaSuffix.size(), kMetaSuffix.size(), kMetaSuffix) == 0) {
+            continue;
+        }
+        names.push_back(name);
+    }
+    std::sort(names.begin(), names.end());
+    return names;
 }
 
 // Same depth-format fallback chain as every sample since M1.
@@ -172,6 +203,13 @@ int main(int argc, char** argv) {
     }
     std::printf("editor: loaded scene \"%s\" (%zu mesh entities)\n", scenePath.c_str(),
                 world.Meshes().Data().size());
+
+    // --- Asset Browser listing (Editor step E6) -- read once at startup, see
+    //     ListDirectory()'s own comment for why this isn't refreshed live. ---
+    const std::vector<std::string> sourceAssetNames = ListDirectory(PI_ENGINE_ASSETS_DIR, true);
+    const std::vector<std::string> cookedAssetNames = ListDirectory(PI_ENGINE_COOKED_ASSET_DIR, false);
+    const std::vector<std::string> cookedShaderNames =
+        ListDirectory(std::string(PI_ENGINE_COOKED_ASSET_DIR) + "/shaders", false);
 
     // --- Depth buffer (same pattern as every sample since M1). ---
     const VkFormat depthFormat = ChooseDepthFormat(context.GetPhysicalDevice());
@@ -412,6 +450,10 @@ int main(int argc, char** argv) {
     std::string saveStatus;
     float saveStatusRemainingSeconds = 0.0f;
 
+    // --- Asset Browser selection (Editor step E6) -- filename only (not a full path);
+    //     empty means nothing selected. ---
+    std::string selectedSourceAsset;
+
     Application::Callbacks callbacks;
 
     callbacks.onUpdate = [&](float deltaSeconds, const engine::platform::InputState& input) {
@@ -563,6 +605,55 @@ int main(int argc, char** argv) {
                 ImGui::SetScrollHereY(1.0f); // Auto-scroll, but only while already at the bottom.
             }
             ImGui::EndChild();
+        }
+        ImGui::End();
+
+        // --- Asset Browser panel (Editor step E6, minimal): assets/ (Cooker source
+        //     assets, docs/01 section 12.1) and assets_cooked/ (this build's Cooker
+        //     output) side by side. Selecting a source asset shows its .meta GUID, if
+        //     one exists (engine::asset::TryReadAssetMetaGuid) -- no "New Script"
+        //     template generation yet (its own larger sub-feature, deferred further). ---
+        ImGui::SetNextWindowPos(ImVec2(720.0f, 470.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(420.0f, 220.0f), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Asset Browser");
+        if (ImGui::CollapsingHeader("Source Assets (assets/)", ImGuiTreeNodeFlags_DefaultOpen)) {
+            for (const std::string& name : sourceAssetNames) {
+                if (ImGui::Selectable(name.c_str(), name == selectedSourceAsset)) {
+                    selectedSourceAsset = name;
+                }
+            }
+            if (sourceAssetNames.empty()) {
+                ImGui::TextDisabled("(empty)");
+            }
+        }
+        if (!selectedSourceAsset.empty()) {
+            ImGui::Separator();
+            AssetGuid guid;
+            const std::string fullPath =
+                std::string(PI_ENGINE_ASSETS_DIR) + "/" + selectedSourceAsset;
+            if (engine::asset::TryReadAssetMetaGuid(fullPath.c_str(), guid)) {
+                ImGui::Text("%s -- GUID: %s", selectedSourceAsset.c_str(),
+                           engine::asset::ToString(guid).c_str());
+            } else {
+                ImGui::Text("%s -- no .meta sidecar", selectedSourceAsset.c_str());
+            }
+        }
+        ImGui::Separator();
+        if (ImGui::CollapsingHeader("Cooked Output (assets_cooked/)")) {
+            for (const std::string& name : cookedAssetNames) {
+                ImGui::BulletText("%s", name.c_str());
+            }
+            if (!cookedShaderNames.empty()) {
+                ImGui::TextUnformatted("shaders/");
+                ImGui::Indent();
+                for (const std::string& name : cookedShaderNames) {
+                    ImGui::BulletText("%s", name.c_str());
+                }
+                ImGui::Unindent();
+            }
+            if (cookedAssetNames.empty() && cookedShaderNames.empty()) {
+                ImGui::TextDisabled("(empty)");
+            }
         }
         ImGui::End();
 

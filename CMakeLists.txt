@@ -27,6 +27,7 @@ set(PI_ENGINE_HARDWARE_PROFILE "desktop" CACHE STRING "Target hardware profile: 
 option(PI_ENGINE_BUILD_TESTS "Build unit tests (doctest)" ON)
 option(PI_ENGINE_BUILD_SAMPLES "Build milestone samples" ON)
 option(PI_ENGINE_BUILD_COOKER "Build the offline asset Cooker CLI tool (docs/01 section 12.4)" ON)
+option(PI_ENGINE_BUILD_EDITOR "Build the Editor application (docs/01 section 6, docs/06-editor-roadmap.md)" ON)
 
 add_subdirectory(engine)
 
@@ -45,4 +46,8 @@ include(CookAssets)
 
 if(PI_ENGINE_BUILD_SAMPLES)
     add_subdirectory(samples)
+endif()
+
+if(PI_ENGINE_BUILD_EDITOR)
+    add_subdirectory(editor)
 endif()

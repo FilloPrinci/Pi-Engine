@@ -1,0 +1,21 @@
+{
+  "_comment": "Editor default demo scene (step E2, docs/06-editor-roadmap.md) -- opened automatically when no scene path is given on the command line. Transform+mesh only, no collider/rigidbody: the Editor's Scene View doesn't wire a physics callback yet (read-only load, see engine::scene::LoadScene's own comment). \"guid\" below is assets/m1_cube.glb's actual, committed Asset GUID (see assets/m1_cube.glb.meta).",
+  "entities": [
+    {
+      "transform": { "position": [0.0, -0.25, 0.0], "scale": [10.0, 0.5, 10.0] },
+      "mesh": { "guid": "93cc3b21eea2afab867b7761cc25c1f3", "boundsRadius": 7.08 }
+    },
+    {
+      "transform": { "position": [-2.0, 0.5, 0.0] },
+      "mesh": { "guid": "93cc3b21eea2afab867b7761cc25c1f3", "boundsRadius": 0.87 }
+    },
+    {
+      "transform": { "position": [0.0, 0.5, 0.0] },
+      "mesh": { "guid": "93cc3b21eea2afab867b7761cc25c1f3", "boundsRadius": 0.87 }
+    },
+    {
+      "transform": { "position": [2.0, 1.0, 0.0], "scale": [1.0, 2.0, 1.0] },
+      "mesh": { "guid": "93cc3b21eea2afab867b7761cc25c1f3", "boundsRadius": 1.5 }
+    }
+  ]
+}

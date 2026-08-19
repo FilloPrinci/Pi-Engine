@@ -89,6 +89,7 @@ Pi-Engine/
 │   ├── e1_imgui_overlay/       # Editor step E1 (docs/06-editor-roadmap.md)
 ├── tools/
 │   └── cooker/                 # offline Asset Cooker CLI (M6, docs/01 section 12.4)
+├── editor/                     # Pi-Engine Editor (docs/01 section 6, docs/06-editor-roadmap.md)
 ├── assets/                     # raw source assets (docs/01 section 12.1)
 ├── shaders/                    # GLSL sources, compiled to SPIR-V by the Cooker
 └── docs/                       # design/analysis documents

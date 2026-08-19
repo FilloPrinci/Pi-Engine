@@ -27,9 +27,12 @@ parsing source assets at runtime (see [`samples/`](samples/)).
 [`docs/06-editor-roadmap.md`](docs/06-editor-roadmap.md) (the full v1 vision in `docs/01`
 section 6 broken into incremental steps E1-E8). **E1 — ImGui-Vulkan integration** is done
 (`engine::debug::ImGuiOverlay`, see [`samples/e1_imgui_overlay`](samples/e1_imgui_overlay));
-**E2 — app skeleton + Scene View** is done too: [`editor/`](editor/) is a real separate
-application linking `engine_core`, loading a `.scene.json` and rendering it with a
-keyboard-navigable camera (A/D yaw, W/S pitch, Up/Down zoom).
+**E2 — app skeleton + Scene View** and **E3 — Inspector panel + entity selection** are
+done too: [`editor/`](editor/) is a real separate application linking `engine_core`,
+loading a `.scene.json` and rendering it with a keyboard-navigable camera (A/D yaw, W/S
+pitch, Up/Down zoom); clicking an entity in the Scene panel selects it and shows its
+Transform/Mesh/Collider in an Inspector panel, editable live — dragging or typing a new
+value moves/resizes the object in the Scene View immediately, no separate "apply" step.
 
 ## Prerequisites
 
@@ -121,7 +124,7 @@ Details: `CLAUDE.md` section 8, [`docs/02-mvp-roadmap-analysis.md`](docs/02-mvp-
 |---|---|---|
 | E1 | ImGui-Vulkan integration | Verified on Linux desktop and physical Pi4 hardware |
 | E2 | `editor/` app skeleton + Scene View | Verified on Linux desktop and physical Pi4 hardware |
-| E3 | Inspector + entity selection | Not started |
+| E3 | Inspector + entity selection | Verified on Linux desktop and physical Pi4 hardware |
 | E4 | Scene saving | Not started |
 | E5 | Console panel | Not started |
 | E6 | Asset Browser (minimal) | Not started |

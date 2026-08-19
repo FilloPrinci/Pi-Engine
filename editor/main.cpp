@@ -30,6 +30,8 @@ using engine::asset::AssetGuid;
 using engine::core::Application;
 using engine::core::Camera;
 using engine::debug::ImGuiOverlay;
+using engine::ecs::ColliderComponent;
+using engine::ecs::Entity;
 using engine::ecs::TransformComponent;
 using engine::ecs::World;
 using engine::platform::Key;
@@ -382,6 +384,14 @@ int main(int argc, char** argv) {
     auto lastFpsReportTime = std::chrono::steady_clock::now();
     double lastReportedFps = 0.0;
 
+    // --- Selection state (Editor step E3) -- kInvalidEntity's generation (0) can never
+    //     match a real, ever-alive entity (World::CreateEntity() always starts a slot's
+    //     generation at 1), so it doubles as a safe "nothing selected" sentinel; combined
+    //     with World::IsAlive() below it also naturally handles a selected entity having
+    //     been destroyed since (not possible yet -- nothing destroys entities in the
+    //     Editor -- but the check costs nothing and stays correct once something does). ---
+    Entity selectedEntity = engine::ecs::kInvalidEntity;
+
     Application::Callbacks callbacks;
 
     callbacks.onUpdate = [&](float deltaSeconds, const engine::platform::InputState& input) {
@@ -413,12 +423,79 @@ int main(int argc, char** argv) {
         }
 
         overlay.NewFrame();
+
+        ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_FirstUseEver);
         ImGui::Begin("Pi-Engine Editor");
         ImGui::Text("Scene: %s", scenePath.c_str());
         ImGui::Text("Entities: %zu mesh", world.Meshes().Data().size());
         ImGui::Text("FPS: %.0f", lastReportedFps);
         ImGui::Separator();
         ImGui::TextUnformatted("Camera: A/D yaw, W/S pitch, Up/Down zoom");
+        ImGui::End();
+
+        // --- Scene panel: every entity with a Transform (docs/06-editor-roadmap.md, E3)
+        //     -- every entity engine::scene::LoadScene spawns has one, so this is the
+        //     full entity list, not a filtered subset. Clicking a row selects it. ---
+        ImGui::SetNextWindowPos(ImVec2(10.0f, 150.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(260.0f, 180.0f), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Scene");
+        const auto& sceneEntities = world.Transforms().Entities();
+        for (const Entity entity : sceneEntities) {
+            char label[64];
+            std::snprintf(label, sizeof(label), "Entity %u.%u", entity.index, entity.generation);
+            if (ImGui::Selectable(label, entity == selectedEntity)) {
+                selectedEntity = entity;
+            }
+        }
+        ImGui::End();
+
+        // --- Inspector panel: the selected entity's components, read-only where editing
+        //     wouldn't mean anything yet (Mesh GUID, Rigidbody body id) and live-editable
+        //     where it does (Transform, Collider shape data) -- DragFloat*/Checkbox below
+        //     mutate the ComponentStorage entry GetTransform()/GetCollider() point right
+        //     into, no separate "apply" step, visible in the Scene View next frame. ---
+        ImGui::SetNextWindowPos(ImVec2(280.0f, 10.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(340.0f, 320.0f), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Inspector");
+        if (world.IsAlive(selectedEntity)) {
+            if (TransformComponent* transform = world.GetTransform(selectedEntity)) {
+                if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::DragFloat3("Position", &transform->position.x, 0.05f);
+                    glm::vec3 eulerDegrees = glm::degrees(glm::eulerAngles(transform->rotation));
+                    if (ImGui::DragFloat3("Rotation", &eulerDegrees.x, 1.0f)) {
+                        transform->rotation = glm::quat(glm::radians(eulerDegrees));
+                    }
+                    ImGui::DragFloat3("Scale", &transform->scale.x, 0.05f, 0.01f, 100.0f);
+                }
+            }
+            if (engine::ecs::MeshComponent* mesh = world.GetMesh(selectedEntity)) {
+                if (ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::Text("GUID: %s", engine::asset::ToString(mesh->meshGuid).c_str());
+                    ImGui::DragFloat("Bounds radius", &mesh->boundsRadius, 0.05f, 0.0f, 100.0f);
+                }
+            }
+            if (ColliderComponent* collider = world.GetCollider(selectedEntity)) {
+                if (ImGui::CollapsingHeader("Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    const bool isBox = collider->shapeType == ColliderComponent::ShapeType::Box;
+                    ImGui::Text("Shape: %s", isBox ? "Box" : "Sphere");
+                    if (isBox) {
+                        ImGui::DragFloat3("Half extents", &collider->halfExtents.x, 0.05f, 0.01f,
+                                          50.0f);
+                    } else {
+                        ImGui::DragFloat("Radius", &collider->radius, 0.05f, 0.01f, 50.0f);
+                    }
+                    ImGui::Checkbox("Is trigger", &collider->isTrigger);
+                }
+            }
+            if (engine::ecs::RigidbodyComponent* rigidbody = world.GetRigidbody(selectedEntity)) {
+                if (ImGui::CollapsingHeader("Rigidbody", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::Text("Body id: %u", rigidbody->bodyId);
+                    ImGui::DragFloat("Mass", &rigidbody->mass, 0.1f, 0.01f, 1000.0f);
+                }
+            }
+        } else {
+            ImGui::TextUnformatted("No entity selected -- click one in the Scene panel.");
+        }
         ImGui::End();
 
         const float aspect = static_cast<float>(swapchain.GetExtent().width) /

@@ -1,5 +1,5 @@
 {
-  "_comment": "Editor default demo scene (step E2, docs/06-editor-roadmap.md) -- opened automatically when no scene path is given on the command line. Transform+mesh only, no collider/rigidbody: the Editor's Scene View doesn't wire a physics callback yet (read-only load, see engine::scene::LoadScene's own comment). \"guid\" below is assets/m1_cube.glb's actual, committed Asset GUID (see assets/m1_cube.glb.meta).",
+  "_comment": "Editor default demo scene (step E2, docs/06-editor-roadmap.md) -- opened automatically when no scene path is given on the command line. No rigidbody: the Editor's Scene View doesn't wire a physics callback yet (read-only load, see engine::scene::LoadScene's own comment); one entity has a collider anyway (E3 step) since Collider components without a Rigidbody spawn cleanly with no warning (SpawnEntities only warns about a missing physics callback for entities that ask for a rigidbody) and it's worth the Inspector panel having a real Collider section to show. \"guid\" below is assets/m1_cube.glb's actual, committed Asset GUID (see assets/m1_cube.glb.meta).",
   "entities": [
     {
       "transform": { "position": [0.0, -0.25, 0.0], "scale": [10.0, 0.5, 10.0] },
@@ -15,7 +15,8 @@
     },
     {
       "transform": { "position": [2.0, 1.0, 0.0], "scale": [1.0, 2.0, 1.0] },
-      "mesh": { "guid": "93cc3b21eea2afab867b7761cc25c1f3", "boundsRadius": 1.5 }
+      "mesh": { "guid": "93cc3b21eea2afab867b7761cc25c1f3", "boundsRadius": 1.5 },
+      "collider": { "shape": "box", "halfExtents": [0.5, 1.0, 0.5] }
     }
   ]
 }

@@ -133,8 +133,9 @@ post-vertical-slice work (docs/02 section 6), picked one at a time rather than p
 a fixed sequence up front.
 
 **Preliminary decisions to avoid getting stuck:**
-- Editor: started — staged roadmap in `docs/06-editor-roadmap.md` (breaks the full v1
-  vision from docs/01 section 6 into incremental steps E1-E8, same discipline as M0-M7).
+- Editor: staged roadmap complete — `docs/06-editor-roadmap.md` (E1-E8, same discipline as
+  M0-M7). `docs/07-unity-parity-analysis.md` maps remaining gaps against Unity's own editor,
+  prioritized by relevance to this project's actual goals, not pursued as a fixed plan.
 - Asset Cooker: full M7 scope done — meshes (with LOD), shaders, textures, all GUID-tagged.
   Still no per-hardware-profile output (no Hardware Profile System built yet), no
   mipmaps/block texture compression, no audio/scene cooking (scenes stay raw JSON by
@@ -163,3 +164,4 @@ For the exact list of files/classes to create in each milestone: `docs/03-techni
 - **Full roadmap** and what's excluded from the vertical slice: `docs/02-mvp-roadmap-analysis.md`
 - **Exact files/classes** to create for each milestone, dependency rationale: `docs/03-technical-analysis-claude-code.md`
 - **Editor staged roadmap** (E1-E8, breaking docs/01 section 6's full v1 vision into incremental steps): `docs/06-editor-roadmap.md`
+- **Editor vs. Unity gap analysis**, prioritized against this project's own goals: `docs/07-unity-parity-analysis.md`

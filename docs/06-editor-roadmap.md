@@ -35,15 +35,17 @@ their own step regardless.
 | E5 | Console panel | Captures engine log output into a scrollable ImGui panel (recent lines, errors highlighted) instead of only stderr in an external terminal. | ✅ Verified on Linux desktop and physical Pi4 hardware (real stderr warnings captured live and highlighted red, output still teed to the launching terminal, Clear button confirmed on real Pi4 hardware) |
 | E6 | Asset Browser (minimal) | Lists `assets/` (source) and the cooked output directory in a panel; selecting a source asset shows its `.meta` GUID. No "New Script" template generation yet (scripting-from-editor is its own larger sub-feature, deferred further). | ✅ Verified on Linux desktop and physical Pi4 hardware (`m1_cube.glb` selected on real Pi4 hardware showed its exact committed GUID; Cooked Output listing confirmed against the real `assets_cooked/` directory) |
 | E7 | Project Hub | Multi-project management (engine installed once, each project references the shared installation) — deferred until there's an actual second project to manage; single-project usage is fine until then. Delivered as a persisted recent-scenes list + one-process-per-project relaunch (matching how Unity Hub actually behaves), not the full "shared engine installation" packaging story, which isn't buildable yet (no install/export target exists for Pi-Engine at all). | ✅ Verified on Linux desktop and physical Pi4 hardware (relaunch confirmed on real Pi4 hardware: clicking a different recent entry loaded that exact scene in a fresh process, old process exited cleanly) |
-| E8 | Build/Play/Debug pipeline | "Play" triggers an incremental CMake build + incremental Cooker run as one flow, shows compile/cook errors in the Console panel (E5), launches the game with the open scene on success; "Play in Debug" launches under GDB. The largest, most self-contained piece — depends on the rest of the Editor existing to be worth building. | Not started |
+| E8 | Build/Play/Debug pipeline | "Play" triggers an incremental CMake build + incremental Cooker run as one flow, shows compile/cook errors in the Console panel (E5), launches the game with the open scene on success; "Play in Debug" launches under GDB. The largest, most self-contained piece — depends on the rest of the Editor existing to be worth building. | ✅ Verified on Linux desktop and physical Pi4 hardware (`editor_play`/`play_main.cpp` — a *separate executable* from `editor`, see its own comment for why; a real ImGui button click over VNC on Pi4 drove build+cook+launch end to end, a dynamic rigidbody entity visibly fell and settled on a static ground collider proving physics genuinely ran, "Play in Debug" confirmed launching the target under a real `gdb` process on Pi4) |
 
 ## Explicitly excluded from every step above (matches `docs/01` section 6.1)
 
 No integrated code editor, no runtime C++ hot-reload — writing code always happens in an
 external IDE (VSCode by default). `compile_commands.json` generation is already unconditional
 (`CMAKE_EXPORT_COMPILE_COMMANDS=ON` project-wide, root `CMakeLists.txt`) and not
-Editor-specific; per-project `.vscode/tasks.json`/`launch.json` generation is part of E8,
-not earlier.
+Editor-specific; per-project `.vscode/tasks.json`/`launch.json` generation did **not** end
+up part of E8's actual delivered scope (Play's own "build + launch" and "build + launch
+under gdb" flows cover the same ground from inside the Editor itself) — still future work
+if a workflow that starts *outside* the Editor, directly from VSCode, turns out to matter.
 
 ## Updating this document
 

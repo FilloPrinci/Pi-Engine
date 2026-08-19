@@ -1,14 +1,13 @@
-#include "BuildPipeline.h"
-#include "ProjectHub.h"
-
 #include "engine/asset/AssetGuid.h"
-#include "engine/asset/AssetMeta.h"
 #include "engine/core/Application.h"
 #include "engine/core/Camera.h"
 #include "engine/core/EngineVersion.h"
 #include "engine/debug/Console.h"
 #include "engine/debug/ImGuiOverlay.h"
 #include "engine/ecs/World.h"
+#include "engine/jobs/JobSystem.h"
+#include "engine/physics/PhysicsPhase.h"
+#include "engine/physics/PhysicsWorld.h"
 #include "engine/platform/SDL2DisplayBackend.h"
 #include "engine/renderer/CookedMesh.h"
 #include "engine/renderer/ForwardLitPipeline.h"
@@ -22,15 +21,11 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <filesystem>
 #include <memory>
 #include <string>
-#include <string_view>
-#include <system_error>
 #include <unordered_map>
 #include <vector>
 
@@ -39,10 +34,12 @@ using engine::core::Application;
 using engine::core::Camera;
 using engine::debug::Console;
 using engine::debug::ImGuiOverlay;
-using engine::ecs::ColliderComponent;
 using engine::ecs::Entity;
 using engine::ecs::TransformComponent;
 using engine::ecs::World;
+using engine::jobs::JobSystem;
+using engine::physics::PhysicsPhase;
+using engine::physics::PhysicsWorld;
 using engine::platform::Key;
 using engine::platform::SDL2DisplayBackend;
 using engine::renderer::ForwardLitPipeline;
@@ -63,37 +60,6 @@ std::string CookedAssetPath(const char* fileName) {
     return std::string(PI_ENGINE_COOKED_ASSET_DIR) + "/" + fileName;
 }
 
-std::string EditorAssetPath(const char* fileName) {
-    return std::string(PI_ENGINE_EDITOR_ASSET_DIR) + "/" + fileName;
-}
-
-// Asset Browser (Editor step E6): filenames directly inside `dir`, sorted, one filesystem
-// read at startup -- not refreshed live (no file-watcher; the Cooker's output doesn't
-// change while the Editor is already running against it). `excludeMetaFiles` hides the
-// GUID sidecars themselves from the "Source Assets" listing -- they're metadata about an
-// asset, not an asset a scene would ever reference.
-std::vector<std::string> ListDirectory(const std::filesystem::path& dir, bool excludeMetaFiles) {
-    std::vector<std::string> names;
-    std::error_code errorCode;
-    if (!std::filesystem::exists(dir, errorCode)) {
-        return names;
-    }
-    for (const auto& entry : std::filesystem::directory_iterator(dir, errorCode)) {
-        if (!entry.is_regular_file()) {
-            continue;
-        }
-        const std::string name = entry.path().filename().string();
-        constexpr std::string_view kMetaSuffix = ".meta";
-        if (excludeMetaFiles && name.size() >= kMetaSuffix.size() &&
-            name.compare(name.size() - kMetaSuffix.size(), kMetaSuffix.size(), kMetaSuffix) == 0) {
-            continue;
-        }
-        names.push_back(name);
-    }
-    std::sort(names.begin(), names.end());
-    return names;
-}
-
 // Same depth-format fallback chain as every sample since M1.
 VkFormat ChooseDepthFormat(VkPhysicalDevice physicalDevice) {
     const VkFormat candidates[] = {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT,
@@ -108,11 +74,8 @@ VkFormat ChooseDepthFormat(VkPhysicalDevice physicalDevice) {
     return VK_FORMAT_UNDEFINED;
 }
 
-// Same GUID -> GPU-buffers cache pattern as samples/m7_scene_and_prefab/main.cpp -- see
-// that file's comment for why this is a map keyed by GUID (not a hardcoded filename) even
-// though, like that sample, this demo scene only ever references one mesh. No GUID ->
-// cooked-path manifest yet (engine/asset/README.md) -- a real Asset Browser (Editor step
-// E6) will need one; this is a placeholder until then.
+// Same GUID -> GPU-buffers placeholder cache as editor/main.cpp -- see that file's own
+// comment (mirrors samples/m7_scene_and_prefab's pattern).
 struct MeshGpuData {
     RHIBuffer vertexBuffer;
     RHIBuffer indexBuffer;
@@ -121,32 +84,46 @@ struct MeshGpuData {
 
 } // namespace
 
-// Editor step E2 -- editor/ app skeleton + Scene View (docs/06-editor-roadmap.md). Exit
-// criterion: a separate application, client of engine_core, that loads an existing
-// .scene.json (read-only -- no physics callback, see engine::scene::LoadScene's own
-// comment) and renders it through the same RHI/ForwardLitPipeline every sample uses, with
-// a keyboard-navigable camera. Also wires up engine::debug::ImGuiOverlay (built in E1) for
-// a small info window -- the foundation E3's Inspector panel builds its real UI on top of.
+// Editor step E8 -- editor_play (docs/06-editor-roadmap.md): "Play" launches this as a
+// *separate executable* from `editor` (BuildPipeline.cpp's LaunchPlayProcess()), not the
+// same binary re-invoked with a flag -- see this file's own CMakeLists.txt entry for why
+// (physics/PhysicsWorld.h pulls in Jolt, and Jolt::Jolt's INTERFACE_COMPILE_OPTIONS would
+// otherwise leak AVX2/FMA compile flags onto every one of `editor`'s own source files, not
+// just this one -- [[vcpkg-dependency-isa-flag-isolation]], the same trap engine_core's
+// own engine_physics_jolt OBJECT library isolation already exists to avoid). Renders and
+// simulates physics for `scenePath` with no Editor panels -- Scene/Inspector/Asset
+// Browser/Project Hub, none of which mean anything once the point is "play the game", not
+// "edit it" -- keeping only a small "Play Mode" info overlay and the Console panel (E5),
+// both useful standalone too.
 //
-// Usage: `editor [path/to/scene.json]` -- defaults to editor/assets/demo.scene.json if no
-// path is given (no Project Hub yet to remember "the last opened project", Editor step E7).
+// Deliberately not a real "game player" in the Unity Play Mode sense: there is no C++
+// hot-reload in this engine (docs/01 section 6.1), so Play can never simulate *inside* the
+// running Editor process the way Unity does -- a separate process is the only option, the
+// same reason Editor step E7's Project Hub relaunches into a new process rather than
+// hot-swapping the loaded scene. A second, structural gap specific to Play (not shared
+// with E7's relaunch): scene JSON (engine::scene::EntityDesc) has no script field at all
+// yet -- ScriptComponents are attached in C++ code (see every m3-m5 sample), never from
+// scene data -- so this renders and simulates physics for the open scene exactly as
+// authored, but no gameplay scripts run unless a future engine::scene format revision
+// adds a data-driven script-attachment field. Documented as a real gap, not silently
+// papered over (see docs/07-unity-parity-analysis.md).
+//
+// Usage: `editor_play <scene.json>` -- no default path (unlike `editor`'s own optional
+// argv[1]): always launched by BuildPipeline.cpp with an explicit scene, never by hand.
 int main(int argc, char** argv) {
-    // Console::Init() must run before any other stdout/stderr I/O (see its own comment on
-    // why) -- literally the first statement in main(), ahead of even the version printf
-    // below. Not fatal if it fails (non-POSIX platform, or the redirect itself failed):
-    // the Console panel just stays empty/disabled, everything else still runs normally
-    // and still prints to the real terminal (see Console.h's "degrade, don't hard-fail").
+    if (argc != 2) {
+        std::fprintf(stderr, "usage: editor_play <scene.json>\n");
+        return EXIT_FAILURE;
+    }
+    const std::string scenePath = argv[1];
+
+    // Console::Init() must run before any other stdout/stderr I/O -- literally the first
+    // statement in main(), same reasoning as editor/main.cpp's own Console::Init() call.
     Console console;
     const bool consoleAvailable = console.Init();
 
-    std::printf("Pi-Engine %s -- Editor\n", engine::core::GetEngineVersionString());
-    if (!consoleAvailable) {
-        std::fprintf(stderr, "editor: Console capture not available on this platform -- the "
-                             "Console panel will stay empty (output still reaches this "
-                             "terminal normally)\n");
-    }
-
-    const std::string scenePath = argc > 1 ? argv[1] : EditorAssetPath("demo.scene.json");
+    std::printf("Pi-Engine %s -- Play Mode (%s)\n", engine::core::GetEngineVersionString(),
+                scenePath.c_str());
 
     SDL2DisplayBackend displayBackend;
     if (!displayBackend.Init()) {
@@ -154,7 +131,7 @@ int main(int argc, char** argv) {
     }
 
     RHIContext context;
-    if (!context.Init(displayBackend, "Pi-Engine Editor")) {
+    if (!context.Init(displayBackend, "Pi-Engine -- Play Mode")) {
         return EXIT_FAILURE;
     }
 
@@ -165,7 +142,6 @@ int main(int argc, char** argv) {
 
     VkDevice device = context.GetDevice();
 
-    // --- Mesh cache (see MeshGpuData's own comment). ---
     std::unordered_map<AssetGuid, std::unique_ptr<MeshGpuData>> meshCache;
     auto resolveMesh = [&](const AssetGuid& guid) -> MeshGpuData* {
         auto it = meshCache.find(guid);
@@ -197,33 +173,40 @@ int main(int argc, char** argv) {
         return result;
     };
 
-    // --- Scene: ECS world only -- no JobSystem/PhysicsWorld yet (read-only Scene View,
-    //     see this file's own comment). ---
+    // --- Scene: ECS World + Job System + Physics World -- unlike the Editor's own
+    //     read-only Scene View (editor/main.cpp), Play Mode is meant to actually run the
+    //     scene, so every entity with both a Collider and a Rigidbody gets a live Jolt
+    //     body via the same CreatePhysicsBodyFn callback SpawnBox() uses in m4/m5. No
+    //     ScriptComponents run (see PlayRuntime.h's own comment on why -- scene JSON has
+    //     no script field yet). ---
     World world;
-    if (!engine::scene::LoadScene(scenePath.c_str(), world)) {
-        std::fprintf(stderr, "editor: failed to load scene \"%s\"\n", scenePath.c_str());
+
+    JobSystem jobSystem;
+    if (!jobSystem.Init()) {
+        std::fprintf(stderr, "play: JobSystem::Init failed\n");
         return EXIT_FAILURE;
     }
-    std::printf("editor: loaded scene \"%s\" (%zu mesh entities)\n", scenePath.c_str(),
+
+    PhysicsWorld physicsWorld;
+    if (!physicsWorld.Init(jobSystem)) {
+        std::fprintf(stderr, "play: PhysicsWorld::Init failed\n");
+        return EXIT_FAILURE;
+    }
+    PhysicsPhase physicsPhase; // default fixed step: 1/60 s (docs/01 section 9.4)
+
+    auto createPhysicsBody = [&](World& w, Entity entity, bool isStatic) {
+        physicsWorld.CreateBody(w, entity, isStatic);
+    };
+    if (!engine::scene::LoadScene(scenePath.c_str(), world, createPhysicsBody)) {
+        std::fprintf(stderr, "play: failed to load scene \"%s\"\n", scenePath.c_str());
+        return EXIT_FAILURE;
+    }
+    std::printf("play: loaded scene \"%s\" (%zu mesh entities)\n", scenePath.c_str(),
                 world.Meshes().Data().size());
-    RecordRecentProject(scenePath); // Editor step E7 -- Project Hub's recent-scenes list.
 
-    // --- Asset Browser listing (Editor step E6) -- read once at startup, see
-    //     ListDirectory()'s own comment for why this isn't refreshed live. ---
-    const std::vector<std::string> sourceAssetNames = ListDirectory(PI_ENGINE_ASSETS_DIR, true);
-    const std::vector<std::string> cookedAssetNames = ListDirectory(PI_ENGINE_COOKED_ASSET_DIR, false);
-    const std::vector<std::string> cookedShaderNames =
-        ListDirectory(std::string(PI_ENGINE_COOKED_ASSET_DIR) + "/shaders", false);
-
-    // --- Project Hub (Editor step E7) -- read once at startup like the listings above;
-    //     re-read after RelaunchWithProject() wouldn't matter anyway since this process is
-    //     about to quit once that succeeds. ---
-    const std::vector<RecentProject> recentProjects = LoadRecentProjects();
-
-    // --- Depth buffer (same pattern as every sample since M1). ---
     const VkFormat depthFormat = ChooseDepthFormat(context.GetPhysicalDevice());
     if (depthFormat == VK_FORMAT_UNDEFINED) {
-        std::fprintf(stderr, "editor: no supported depth/stencil format found\n");
+        std::fprintf(stderr, "play: no supported depth/stencil format found\n");
         return EXIT_FAILURE;
     }
 
@@ -250,7 +233,7 @@ int main(int argc, char** argv) {
 
         if (vmaCreateImage(context.GetAllocator(), &imageInfo, &allocInfo, &depthImage,
                             &depthAllocation, nullptr) != VK_SUCCESS) {
-            std::fprintf(stderr, "editor: vmaCreateImage (depth) failed\n");
+            std::fprintf(stderr, "play: vmaCreateImage (depth) failed\n");
             return false;
         }
 
@@ -264,7 +247,7 @@ int main(int argc, char** argv) {
         viewInfo.subresourceRange.layerCount = 1;
 
         if (vkCreateImageView(device, &viewInfo, nullptr, &depthView) != VK_SUCCESS) {
-            std::fprintf(stderr, "editor: vkCreateImageView (depth) failed\n");
+            std::fprintf(stderr, "play: vkCreateImageView (depth) failed\n");
             return false;
         }
         return true;
@@ -286,8 +269,6 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    // --- Render pass: color + depth (same as every sample since M1). ImGuiOverlay draws
-    //     into this same render pass/subpass. ---
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = swapchain.GetImageFormat();
     colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -346,7 +327,7 @@ int main(int argc, char** argv) {
 
     VkRenderPass renderPass = VK_NULL_HANDLE;
     if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) {
-        std::fprintf(stderr, "editor: vkCreateRenderPass failed\n");
+        std::fprintf(stderr, "play: vkCreateRenderPass failed\n");
         return EXIT_FAILURE;
     }
 
@@ -379,7 +360,7 @@ int main(int argc, char** argv) {
 
             if (vkCreateFramebuffer(device, &framebufferInfo, nullptr, &framebuffers[i]) !=
                 VK_SUCCESS) {
-                std::fprintf(stderr, "editor: vkCreateFramebuffer failed for image %zu\n", i);
+                std::fprintf(stderr, "play: vkCreateFramebuffer failed for image %zu\n", i);
                 return false;
             }
         }
@@ -396,7 +377,7 @@ int main(int argc, char** argv) {
 
     VkCommandPool commandPool = VK_NULL_HANDLE;
     if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
-        std::fprintf(stderr, "editor: vkCreateCommandPool failed\n");
+        std::fprintf(stderr, "play: vkCreateCommandPool failed\n");
         return EXIT_FAILURE;
     }
 
@@ -407,7 +388,7 @@ int main(int argc, char** argv) {
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     allocInfo.commandBufferCount = kMaxFramesInFlight;
     if (vkAllocateCommandBuffers(device, &allocInfo, commandBuffers) != VK_SUCCESS) {
-        std::fprintf(stderr, "editor: vkAllocateCommandBuffers failed\n");
+        std::fprintf(stderr, "play: vkAllocateCommandBuffers failed\n");
         return EXIT_FAILURE;
     }
 
@@ -425,16 +406,14 @@ int main(int argc, char** argv) {
         if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailable[i]) != VK_SUCCESS ||
             vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinished[i]) != VK_SUCCESS ||
             vkCreateFence(device, &fenceInfo, nullptr, &inFlight[i]) != VK_SUCCESS) {
-            std::fprintf(stderr, "editor: failed to create sync objects for frame %d\n", i);
+            std::fprintf(stderr, "play: failed to create sync objects for frame %d\n", i);
             return EXIT_FAILURE;
         }
     }
 
-    // --- Camera: keyboard-navigable orbit (no mouse-look input plumbing exists yet, see
-    //     engine::debug::ImGuiOverlay.h's own "not addressed yet" comment) -- W/S pitch,
-    //     A/D yaw, Up/Down zoom. Reuses the plain InputState::keysHeld this sample already
-    //     gets from Application's onUpdate, not engine::platform::InputSystem (no edge
-    //     detection needed for continuous navigation). ---
+    // Same keyboard-only orbit camera as editor/main.cpp -- there's no in-game/main-camera
+    // concept yet (docs/07-unity-parity-analysis.md), so Play Mode reuses the Editor's own
+    // free-look-less orbit rather than inventing a second, different scheme.
     Camera camera;
     camera.target = glm::vec3(0.0f, 1.0f, 0.0f);
     camera.distance = 12.0f;
@@ -445,32 +424,6 @@ int main(int argc, char** argv) {
     std::uint32_t framesSinceReport = 0;
     auto lastFpsReportTime = std::chrono::steady_clock::now();
     double lastReportedFps = 0.0;
-
-    // --- Selection state (Editor step E3) -- kInvalidEntity's generation (0) can never
-    //     match a real, ever-alive entity (World::CreateEntity() always starts a slot's
-    //     generation at 1), so it doubles as a safe "nothing selected" sentinel; combined
-    //     with World::IsAlive() below it also naturally handles a selected entity having
-    //     been destroyed since (not possible yet -- nothing destroys entities in the
-    //     Editor -- but the check costs nothing and stays correct once something does). ---
-    Entity selectedEntity = engine::ecs::kInvalidEntity;
-
-    // --- Save status (Editor step E4) -- shown for a few seconds after a Save click so
-    //     the button press has visible feedback beyond a stderr line. ---
-    std::string saveStatus;
-    float saveStatusRemainingSeconds = 0.0f;
-
-    // --- Play status (Editor step E8) -- same "shown for a few seconds" pattern as Save
-    //     above. RunBuildAndCook() blocks the UI thread for the duration of the build/cook
-    //     (see BuildPipeline.h's own comment on why that's an accepted v1 simplification),
-    //     so the button visibly does nothing until it returns -- the status text is the
-    //     only feedback while that's happening. ---
-    std::string playStatus;
-    float playStatusRemainingSeconds = 0.0f;
-    const std::string buildDir = PI_ENGINE_BUILD_DIR;
-
-    // --- Asset Browser selection (Editor step E6) -- filename only (not a full path);
-    //     empty means nothing selected. ---
-    std::string selectedSourceAsset;
 
     Application::Callbacks callbacks;
 
@@ -501,143 +454,33 @@ int main(int argc, char** argv) {
         if (input.keysHeld[static_cast<std::size_t>(Key::Down)]) {
             camera.distance = std::min(kMaxDistance, camera.distance + kZoomSpeed * deltaSeconds);
         }
+        // Esc ends Play Mode -- the only way out other than closing the window, since
+        // there's no Editor UI here to click a "Stop" button in.
+        if (input.keysHeld[static_cast<std::size_t>(Key::Escape)]) {
+            displayBackend.RequestQuit();
+        }
+
+        // The Physics phase from CLAUDE.md section 4 (Script phase is a no-op here -- see
+        // PlayRuntime.h -- so this starts straight at Physics): PhysicsPhase::Update() is
+        // itself the barrier (its own comment explains why), SyncTransforms() is
+        // Post-Physics.
+        physicsPhase.Update(physicsWorld, world, deltaSeconds);
+        physicsWorld.SyncTransforms(world);
 
         overlay.NewFrame();
         console.Update();
 
         ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_FirstUseEver);
-        ImGui::Begin("Pi-Engine Editor");
+        ImGui::Begin("Play Mode");
         ImGui::Text("Scene: %s", scenePath.c_str());
-        ImGui::Text("Entities: %zu mesh", world.Meshes().Data().size());
         ImGui::Text("FPS: %.0f", lastReportedFps);
-        ImGui::Separator();
-        ImGui::TextUnformatted("Camera: A/D yaw, W/S pitch, Up/Down zoom");
-        ImGui::Separator();
-        // Writes back through the same JSON schema LoadScene() reads (docs/06-editor-
-        // roadmap.md, E4) -- overwrites scenePath, no "Save As" yet (Editor step E7's
-        // Project Hub is the more natural place to manage multiple scene files).
-        if (ImGui::Button("Save")) {
-            const bool ok = engine::scene::SaveScene(scenePath.c_str(), world);
-            saveStatus = ok ? "Saved." : "Save failed -- see stderr.";
-            saveStatusRemainingSeconds = 3.0f;
-        }
-        if (saveStatusRemainingSeconds > 0.0f) {
-            saveStatusRemainingSeconds -= deltaSeconds;
-            ImGui::SameLine();
-            ImGui::TextUnformatted(saveStatus.c_str());
-        }
-        ImGui::Separator();
-        // Editor step E8: build (incremental) + cook (incremental) + launch, one flow,
-        // errors surfacing in the Console panel below since the child processes inherit
-        // this process's already-redirected stdout/stderr (BuildPipeline.h). "Play in
-        // Debug" runs the exact same thing under gdb in batch mode instead.
-        auto runPlay = [&](bool debug) {
-            playStatus = "Building...";
-            if (!RunBuildAndCook(buildDir)) {
-                playStatus = "Build/Cook failed -- see Console.";
-            } else if (!LaunchPlayProcess(scenePath, debug)) {
-                playStatus = "Launch failed -- not supported on this platform, or fork() failed.";
-            } else {
-                playStatus = debug ? "Launched under gdb." : "Launched.";
-            }
-            playStatusRemainingSeconds = 4.0f;
-        };
-        if (ImGui::Button("Play")) {
-            runPlay(false);
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Play in Debug")) {
-            runPlay(true);
-        }
-        if (playStatusRemainingSeconds > 0.0f) {
-            playStatusRemainingSeconds -= deltaSeconds;
-            ImGui::SameLine();
-            ImGui::TextUnformatted(playStatus.c_str());
-        }
+        ImGui::TextUnformatted("Esc or close the window to stop.");
         ImGui::End();
 
-        // --- Scene panel: every entity with a Transform (docs/06-editor-roadmap.md, E3)
-        //     -- every entity engine::scene::LoadScene spawns has one, so this is the
-        //     full entity list, not a filtered subset. Clicking a row selects it. Y offset
-        //     (220, was 150 through Editor step E7) leaves room below the "Pi-Engine
-        //     Editor" info window above, which grew a Play/Play in Debug row in E8. ---
-        ImGui::SetNextWindowPos(ImVec2(10.0f, 220.0f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(260.0f, 180.0f), ImGuiCond_FirstUseEver);
-        ImGui::Begin("Scene");
-        const auto& sceneEntities = world.Transforms().Entities();
-        for (const Entity entity : sceneEntities) {
-            char label[64];
-            std::snprintf(label, sizeof(label), "Entity %u.%u", entity.index, entity.generation);
-            if (ImGui::Selectable(label, entity == selectedEntity)) {
-                selectedEntity = entity;
-            }
-        }
-        ImGui::End();
-
-        // --- Inspector panel: the selected entity's components, read-only where editing
-        //     wouldn't mean anything yet (Mesh GUID, Rigidbody body id) and live-editable
-        //     where it does (Transform, Collider shape data) -- DragFloat*/Checkbox below
-        //     mutate the ComponentStorage entry GetTransform()/GetCollider() point right
-        //     into, no separate "apply" step, visible in the Scene View next frame. ---
-        ImGui::SetNextWindowPos(ImVec2(280.0f, 10.0f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(340.0f, 320.0f), ImGuiCond_FirstUseEver);
-        ImGui::Begin("Inspector");
-        if (world.IsAlive(selectedEntity)) {
-            if (TransformComponent* transform = world.GetTransform(selectedEntity)) {
-                if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    ImGui::DragFloat3("Position", &transform->position.x, 0.05f);
-                    glm::vec3 eulerDegrees = glm::degrees(glm::eulerAngles(transform->rotation));
-                    if (ImGui::DragFloat3("Rotation", &eulerDegrees.x, 1.0f)) {
-                        transform->rotation = glm::quat(glm::radians(eulerDegrees));
-                    }
-                    ImGui::DragFloat3("Scale", &transform->scale.x, 0.05f, 0.01f, 100.0f);
-                }
-            }
-            if (engine::ecs::MeshComponent* mesh = world.GetMesh(selectedEntity)) {
-                if (ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    ImGui::Text("GUID: %s", engine::asset::ToString(mesh->meshGuid).c_str());
-                    ImGui::DragFloat("Bounds radius", &mesh->boundsRadius, 0.05f, 0.0f, 100.0f);
-                }
-            }
-            if (ColliderComponent* collider = world.GetCollider(selectedEntity)) {
-                if (ImGui::CollapsingHeader("Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    const bool isBox = collider->shapeType == ColliderComponent::ShapeType::Box;
-                    ImGui::Text("Shape: %s", isBox ? "Box" : "Sphere");
-                    if (isBox) {
-                        ImGui::DragFloat3("Half extents", &collider->halfExtents.x, 0.05f, 0.01f,
-                                          50.0f);
-                    } else {
-                        ImGui::DragFloat("Radius", &collider->radius, 0.05f, 0.01f, 50.0f);
-                    }
-                    ImGui::Checkbox("Is trigger", &collider->isTrigger);
-                }
-            }
-            if (engine::ecs::RigidbodyComponent* rigidbody = world.GetRigidbody(selectedEntity)) {
-                if (ImGui::CollapsingHeader("Rigidbody", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    ImGui::Text("Body id: %u", rigidbody->bodyId);
-                    ImGui::DragFloat("Mass", &rigidbody->mass, 0.1f, 0.01f, 1000.0f);
-                }
-            }
-        } else {
-            ImGui::TextUnformatted("No entity selected -- click one in the Scene panel.");
-        }
-        ImGui::End();
-
-        // --- Console panel (Editor step E5): every stdout/stderr line the engine has
-        //     printed since Console::Init() (main()'s first statement), stderr lines
-        //     highlighted red. Not a new logging API -- every existing
-        //     std::printf/std::fprintf(stderr, ...) call site across the engine is
-        //     captured as-is (Console.h's own comment explains how). ---
-        ImGui::SetNextWindowPos(ImVec2(10.0f, 470.0f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(700.0f, 220.0f), ImGuiCond_FirstUseEver);
-        ImGui::Begin("Console");
-        if (!consoleAvailable) {
-            ImGui::TextUnformatted("Console capture not available on this platform.");
-        } else {
-            if (ImGui::Button("Clear")) {
-                console.Clear();
-            }
-            ImGui::SameLine();
+        if (consoleAvailable) {
+            ImGui::SetNextWindowPos(ImVec2(10.0f, 110.0f), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize(ImVec2(700.0f, 220.0f), ImGuiCond_FirstUseEver);
+            ImGui::Begin("Console");
             ImGui::Text("%zu line(s)", console.GetLines().size());
             ImGui::Separator();
             ImGui::BeginChild("ConsoleScroll", ImVec2(0.0f, 0.0f), false,
@@ -650,95 +493,11 @@ int main(int argc, char** argv) {
                 }
             }
             if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
-                ImGui::SetScrollHereY(1.0f); // Auto-scroll, but only while already at the bottom.
+                ImGui::SetScrollHereY(1.0f);
             }
             ImGui::EndChild();
+            ImGui::End();
         }
-        ImGui::End();
-
-        // --- Asset Browser panel (Editor step E6, minimal): assets/ (Cooker source
-        //     assets, docs/01 section 12.1) and assets_cooked/ (this build's Cooker
-        //     output) side by side. Selecting a source asset shows its .meta GUID, if
-        //     one exists (engine::asset::TryReadAssetMetaGuid) -- no "New Script"
-        //     template generation yet (its own larger sub-feature, deferred further). ---
-        ImGui::SetNextWindowPos(ImVec2(720.0f, 470.0f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(420.0f, 220.0f), ImGuiCond_FirstUseEver);
-        ImGui::Begin("Asset Browser");
-        if (ImGui::CollapsingHeader("Source Assets (assets/)", ImGuiTreeNodeFlags_DefaultOpen)) {
-            for (const std::string& name : sourceAssetNames) {
-                if (ImGui::Selectable(name.c_str(), name == selectedSourceAsset)) {
-                    selectedSourceAsset = name;
-                }
-            }
-            if (sourceAssetNames.empty()) {
-                ImGui::TextDisabled("(empty)");
-            }
-        }
-        if (!selectedSourceAsset.empty()) {
-            ImGui::Separator();
-            AssetGuid guid;
-            const std::string fullPath =
-                std::string(PI_ENGINE_ASSETS_DIR) + "/" + selectedSourceAsset;
-            if (engine::asset::TryReadAssetMetaGuid(fullPath.c_str(), guid)) {
-                ImGui::Text("%s -- GUID: %s", selectedSourceAsset.c_str(),
-                           engine::asset::ToString(guid).c_str());
-            } else {
-                ImGui::Text("%s -- no .meta sidecar", selectedSourceAsset.c_str());
-            }
-        }
-        ImGui::Separator();
-        if (ImGui::CollapsingHeader("Cooked Output (assets_cooked/)")) {
-            for (const std::string& name : cookedAssetNames) {
-                ImGui::BulletText("%s", name.c_str());
-            }
-            if (!cookedShaderNames.empty()) {
-                ImGui::TextUnformatted("shaders/");
-                ImGui::Indent();
-                for (const std::string& name : cookedShaderNames) {
-                    ImGui::BulletText("%s", name.c_str());
-                }
-                ImGui::Unindent();
-            }
-            if (cookedAssetNames.empty() && cookedShaderNames.empty()) {
-                ImGui::TextDisabled("(empty)");
-            }
-        }
-        ImGui::End();
-
-        // --- Project Hub panel (Editor step E7, minimal -- see ProjectHub.h's own
-        //     comment for why this is a recent-scenes list rather than a full "shared
-        //     engine installation, multiple project directories" system). Opening a
-        //     *different* scene than the one this process already has open relaunches
-        //     the Editor pointed at it (one process per open project, same as Unity Hub
-        //     really works) instead of trying to hot-swap the running World -- nothing
-        //     else in this engine supports live-reloading either. ---
-        ImGui::SetNextWindowPos(ImVec2(1160.0f, 470.0f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(320.0f, 220.0f), ImGuiCond_FirstUseEver);
-        ImGui::Begin("Project Hub");
-        if (recentProjects.empty()) {
-            ImGui::TextDisabled("(no recent scenes yet)");
-        }
-        for (const RecentProject& project : recentProjects) {
-            const bool isCurrent = project.scenePath == scenePath;
-            ImGui::BeginDisabled(isCurrent);
-            if (ImGui::Selectable(project.scenePath.c_str())) {
-                if (RelaunchWithProject(project.scenePath)) {
-                    displayBackend.RequestQuit();
-                } else {
-                    std::fprintf(stderr,
-                                 "editor: couldn't relaunch for \"%s\" -- not supported on "
-                                 "this platform, or the relaunch itself failed to start\n",
-                                 project.scenePath.c_str());
-                }
-            }
-            ImGui::EndDisabled();
-            ImGui::TextDisabled("    opened %s", project.lastOpenedUtc.c_str());
-            if (isCurrent) {
-                ImGui::SameLine();
-                ImGui::TextDisabled("(current)");
-            }
-        }
-        ImGui::End();
 
         const float aspect = static_cast<float>(swapchain.GetExtent().width) /
                               static_cast<float>(swapchain.GetExtent().height);
@@ -764,7 +523,7 @@ int main(int argc, char** argv) {
             return;
         }
         if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR) {
-            std::fprintf(stderr, "editor: vkAcquireNextImageKHR failed\n");
+            std::fprintf(stderr, "play: vkAcquireNextImageKHR failed\n");
             return;
         }
 
@@ -793,8 +552,6 @@ int main(int argc, char** argv) {
         vkCmdBeginRenderPass(cmd, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
         pipeline.Bind(cmd);
 
-        // Every entity with both a Transform and a Mesh gets drawn, resolved by GUID
-        // through the cache above (same pattern as samples/m7_scene_and_prefab).
         const auto& meshes = world.Meshes().Data();
         const auto& meshEntities = world.Meshes().Entities();
         for (std::size_t i = 0; i < meshes.size(); ++i) {
@@ -817,7 +574,6 @@ int main(int argc, char** argv) {
             vkCmdDrawIndexed(cmd, gpuData->indexCount, 1, 0, 0, 0);
         }
 
-        // ImGui draws last, into the same render pass/subpass, on top of the scene.
         overlay.Render(cmd);
 
         vkCmdEndRenderPass(cmd);
@@ -839,7 +595,7 @@ int main(int argc, char** argv) {
 
         if (vkQueueSubmit(context.GetGraphicsQueue(), 1, &submitInfo, inFlight[currentFrame]) !=
             VK_SUCCESS) {
-            std::fprintf(stderr, "editor: vkQueueSubmit failed\n");
+            std::fprintf(stderr, "play: vkQueueSubmit failed\n");
             return;
         }
 
@@ -863,7 +619,7 @@ int main(int argc, char** argv) {
             createDepthResources(swapchain.GetExtent());
             createFramebuffers();
         } else if (presentResult != VK_SUCCESS) {
-            std::fprintf(stderr, "editor: vkQueuePresentKHR failed\n");
+            std::fprintf(stderr, "play: vkQueuePresentKHR failed\n");
             return;
         }
 
@@ -875,14 +631,14 @@ int main(int argc, char** argv) {
         if (elapsed.count() >= 0.5) {
             lastReportedFps = static_cast<double>(framesSinceReport) / elapsed.count();
             char title[96];
-            std::snprintf(title, sizeof(title), "Pi-Engine Editor (%.0f FPS)", lastReportedFps);
+            std::snprintf(title, sizeof(title), "Pi-Engine -- Play Mode (%.0f FPS)", lastReportedFps);
             displayBackend.SetWindowTitle(title);
             framesSinceReport = 0;
             lastFpsReportTime = now;
         }
     };
 
-    std::printf("editor: running, close the window to exit.\n");
+    std::printf("play: running, Esc or close the window to stop.\n");
     Application application;
     application.Run(displayBackend, callbacks);
 
@@ -902,14 +658,12 @@ int main(int argc, char** argv) {
     destroyDepthResources();
     vkDestroyRenderPass(device, renderPass, nullptr);
 
-    meshCache.clear(); // destroys every RHIBuffer -- must happen before context.Shutdown()
+    meshCache.clear();
     swapchain.Shutdown();
     context.Shutdown();
     displayBackend.Shutdown();
 
-    std::printf("editor: clean exit.\n");
-    console.Shutdown(); // Restores the real stdout/stderr fds (also happens in ~Console()
-                        // regardless -- explicit here to match this function's own style
-                        // of always calling Shutdown() rather than relying only on RAII).
+    std::printf("play: clean exit.\n");
+    console.Shutdown();
     return EXIT_SUCCESS;
 }

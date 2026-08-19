@@ -23,25 +23,30 @@ cooking + a dedicated textured pipeline, and Cooker-generated mesh LODs via
 `meshoptimizer`. Every sample now loads Cooker output (meshes/shaders/textures) instead of
 parsing source assets at runtime (see [`samples/`](samples/)).
 
-**Editor**: in progress, following a staged roadmap in
-[`docs/06-editor-roadmap.md`](docs/06-editor-roadmap.md) (the full v1 vision in `docs/01`
-section 6 broken into incremental steps E1-E8). **E1 — ImGui-Vulkan integration** is done
-(`engine::debug::ImGuiOverlay`, see [`samples/e1_imgui_overlay`](samples/e1_imgui_overlay));
-**E2 — app skeleton + Scene View**, **E3 — Inspector panel + entity selection**,
-**E4 — Scene saving**, **E5 — Console panel**, **E6 — Asset Browser**, and
-**E7 — Project Hub** are done too: [`editor/`](editor/) is a real separate application
-linking `engine_core`, loading a `.scene.json` and rendering it with a keyboard-navigable
-camera (A/D yaw, W/S pitch, Up/Down zoom); clicking an entity in the Scene panel selects it
-and shows its Transform/Mesh/Collider in an Inspector panel, editable live — dragging or
-typing a new value moves/resizes the object in the Scene View immediately; a "Save" button
-writes the edited state back to the same `.scene.json`, round-tripping through the existing
-scene format with no new format invented; a Console panel captures the engine's existing
+**Editor**: the full staged roadmap in [`docs/06-editor-roadmap.md`](docs/06-editor-roadmap.md)
+(`docs/01` section 6's v1 vision broken into incremental steps E1-E8) is now complete.
+**E1 — ImGui-Vulkan integration** (`engine::debug::ImGuiOverlay`, see
+[`samples/e1_imgui_overlay`](samples/e1_imgui_overlay)) through **E7 — Project Hub**:
+[`editor/`](editor/) is a real separate application linking `engine_core`, loading a
+`.scene.json` and rendering it with a keyboard-navigable camera (A/D yaw, W/S pitch,
+Up/Down zoom); clicking an entity in the Scene panel selects it and shows its
+Transform/Mesh/Collider in an Inspector panel, editable live — dragging or typing a new
+value moves/resizes the object in the Scene View immediately; a "Save" button writes the
+edited state back to the same `.scene.json`, round-tripping through the existing scene
+format with no new format invented; a Console panel captures the engine's existing
 stdout/stderr output live (errors highlighted red), still teed to the launching terminal
 too; an Asset Browser lists `assets/` and the Cooker's output side by side, showing a
 selected source asset's persistent GUID; a Project Hub panel remembers every scene the
 Editor has opened and relaunches into a different one on click (`fork()`+`execv()`, one
 process per open project/scene, the same way Unity Hub and the Unity Editor are actually
-separate processes).
+separate processes). **E8 — Build/Play/Debug pipeline** finishes the roadmap: a "Play"
+button runs an incremental build + Cooker pass and launches the scene in a live,
+physics-simulated window (`editor_play`, a separate executable so Jolt's compile-flag
+requirements never leak onto the rest of the Editor's own source files); "Play in Debug"
+runs the same flow under `gdb`. A follow-up analysis,
+[`docs/07-unity-parity-analysis.md`](docs/07-unity-parity-analysis.md), maps what it would
+take to bring the Editor closer to Unity's own feature set and prioritizes those gaps
+against this project's actual goals.
 
 ## Prerequisites
 
@@ -127,7 +132,7 @@ M0-M5 is the initial roadmap (the vertical slice); M6 onward is post-vertical-sl
 
 Details: `CLAUDE.md` section 8, [`docs/02-mvp-roadmap-analysis.md`](docs/02-mvp-roadmap-analysis.md).
 
-### Editor (in progress)
+### Editor
 
 | # | Step | Status |
 |---|---|---|
@@ -138,6 +143,8 @@ Details: `CLAUDE.md` section 8, [`docs/02-mvp-roadmap-analysis.md`](docs/02-mvp-
 | E5 | Console panel | Verified on Linux desktop and physical Pi4 hardware |
 | E6 | Asset Browser (minimal) | Verified on Linux desktop and physical Pi4 hardware |
 | E7 | Project Hub | Verified on Linux desktop and physical Pi4 hardware |
-| E8 | Build/Play/Debug pipeline | Not started |
+| E8 | Build/Play/Debug pipeline | Verified on Linux desktop and physical Pi4 hardware |
 
-Details: [`docs/06-editor-roadmap.md`](docs/06-editor-roadmap.md).
+Details: [`docs/06-editor-roadmap.md`](docs/06-editor-roadmap.md). What it would take to
+close the gap with Unity's own editor, prioritized against this project's actual goals:
+[`docs/07-unity-parity-analysis.md`](docs/07-unity-parity-analysis.md).

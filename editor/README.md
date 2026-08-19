@@ -52,7 +52,7 @@ an existing `.meta` sidecar, never creates one) or "no `.meta` sidecar" if none 
 No "New Script" template generation yet -- scripting-from-editor is its own larger
 sub-feature, deferred further.
 
-**Step E7 (current)**: Project Hub (minimal -- see `ProjectHub.h`'s own comment for why
+**Step E7**: Project Hub (minimal -- see `ProjectHub.h`'s own comment for why
 this isn't the full "shared engine installation, multiple project directories" system
 docs/01 section 6.1 describes; that isn't buildable yet since Pi-Engine has no
 install/export target at all). Every successful scene load is recorded to a small local
@@ -64,9 +64,31 @@ project/scene, the same way Unity Hub and the Unity Editor are actually two sepa
 processes rather than one process hot-swapping its loaded project. Linux only; on another
 platform the relaunch simply doesn't happen (logged, not fatal).
 
+**Step E8 (current)**: Build/Play/Debug pipeline. A **Play** button (next to Save) runs
+`cmake --build <dir> --target editor_play`, then re-cooks (`cooked_assets`/
+`cooked_shaders`/`cooked_textures`) -- both incremental, CMake's own dependency tracking --
+and, on success, launches `editor_play` (see `play_main.cpp`'s own comment) pointed at the
+currently open scene. **Play in Debug** runs the exact same flow but wraps the launch in
+`gdb -batch -ex run -ex bt` instead, so a crash prints a backtrace. Both child processes
+(the `cmake`/cook steps and the launched game) inherit this process's stdout/stderr
+unredirected, which are already piped into the Console panel (E5) at the OS level -- so
+build errors, cook errors, and the running game's own log lines all show up there live,
+no separate output-capture plumbing needed. `editor_play` is a genuinely separate
+executable from `editor`, not this same binary re-invoked with a flag -- linking
+`Jolt::Jolt` (needed for `physics::PhysicsWorld`) directly onto `editor` would leak its
+AVX2/FMA compile flags onto every one of `editor`'s own source files, most of which have
+nothing to do with physics (see `CMakeLists.txt`'s own comment). Play launches a fresh,
+independent process and the Editor keeps running -- unlike Unity, this engine has no
+runtime C++ hot-reload, so simulating *inside* the running Editor process was never an
+option; Play Mode here means "run the game for real, in its own window", the same
+structural choice Project Hub's relaunch already made for switching scenes. Play Mode
+renders and simulates physics for the scene exactly as authored, but no gameplay scripts
+run -- scene JSON has no script-attachment field yet, a real gap, not silently papered
+over (see `docs/07-unity-parity-analysis.md`).
+
 Mesh resolution is a placeholder GUID → GPU-buffers cache (same pattern as
 `samples/m7_scene_and_prefab`) that only knows about `m1_cube.mesh` — a real GUID →
 cooked-path manifest is Asset Browser territory (Editor step E6), not built yet.
 
-See the roadmap doc for what's explicitly deferred to later steps (editing, saving,
-Console panel, Asset Browser, Project Hub, the Build/Play/Debug pipeline).
+See the roadmap doc for what's explicitly deferred to later steps, and
+`docs/07-unity-parity-analysis.md` for what's missing relative to Unity's own editor.

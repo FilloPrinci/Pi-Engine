@@ -6,10 +6,12 @@
 
 using engine::asset::AssetGuid;
 using engine::asset::GenerateAssetGuid;
+using engine::renderer::GetCookedMeshLODCount;
 using engine::renderer::LoadCookedMesh;
 using engine::renderer::MeshData;
 using engine::renderer::Vertex;
 using engine::renderer::WriteCookedMesh;
+using engine::renderer::WriteCookedMeshLODs;
 
 namespace {
 
@@ -113,4 +115,46 @@ TEST_CASE("LoadCookedMesh rejects a stale version 1 file (pre-GUID format)") {
 
     MeshData loaded;
     CHECK_FALSE(LoadCookedMesh(file.m_path, loaded));
+}
+
+TEST_CASE("WriteCookedMeshLODs/LoadCookedMesh round-trip selects the requested LOD index") {
+    ScopedTempFile file("cooked_mesh_lods.tmp.mesh");
+
+    const std::vector<Vertex> vertices = {
+        Vertex{glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.0f, 0.0f)},
+        Vertex{glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(1.0f, 0.0f)},
+        Vertex{glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(0.0f, 1.0f)},
+        Vertex{glm::vec3(1.0f, 1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(1.0f, 1.0f)},
+    };
+    // LOD0: two triangles (the full quad). LOD1: a single, coarser triangle -- not a
+    // realistic simplifier output, just distinct data to prove the right LOD comes back.
+    const std::vector<std::uint32_t> lod0 = {0, 1, 2, 1, 3, 2};
+    const std::vector<std::uint32_t> lod1 = {0, 1, 3};
+    const AssetGuid guid = GenerateAssetGuid();
+
+    REQUIRE(WriteCookedMeshLODs(file.m_path, guid, vertices, {lod0, lod1}));
+
+    std::uint32_t lodCount = 0;
+    REQUIRE(GetCookedMeshLODCount(file.m_path, lodCount));
+    CHECK(lodCount == 2);
+
+    MeshData loadedLod0;
+    AssetGuid loadedGuid;
+    REQUIRE(LoadCookedMesh(file.m_path, loadedLod0, &loadedGuid, 0));
+    CHECK(loadedGuid == guid);
+    CHECK(loadedLod0.vertices.size() == vertices.size());
+    CHECK(loadedLod0.indices == lod0);
+
+    MeshData loadedLod1;
+    REQUIRE(LoadCookedMesh(file.m_path, loadedLod1, nullptr, 1));
+    CHECK(loadedLod1.vertices.size() == vertices.size()); // Shared vertex buffer, same for every LOD.
+    CHECK(loadedLod1.indices == lod1);
+}
+
+TEST_CASE("LoadCookedMesh rejects a LOD index out of range") {
+    ScopedTempFile file("cooked_mesh_lod_out_of_range.tmp.mesh");
+    REQUIRE(WriteCookedMesh(file.m_path, GenerateAssetGuid(), MeshData{}));
+
+    MeshData loaded;
+    CHECK_FALSE(LoadCookedMesh(file.m_path, loaded, nullptr, 1)); // WriteCookedMesh only wrote LOD0.
 }

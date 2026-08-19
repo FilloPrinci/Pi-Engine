@@ -23,11 +23,14 @@ set(PI_ENGINE_COOKED_SHADER_DIR "${PI_ENGINE_COOKED_ASSET_DIR}/shaders" CACHE PA
 
 if(TARGET cooker)
     # Every mesh source under assets/ (docs/01 section 12.1) -- m1_cube.glb (M1, reused by
-    # most samples) and m7_quad.gltf (M7 textures step: a hand-authored quad with UVs,
-    # since m1_cube.glb predates TEXCOORD_0 and isn't worth regenerating just for this).
+    # most samples), m7_quad.gltf (M7 textures step: a hand-authored quad with UVs, since
+    # m1_cube.glb predates TEXCOORD_0 and isn't worth regenerating just for this), and
+    # m7_lod_sphere.gltf (M7 LOD-generation step: a subdivided icosphere -- m1_cube.glb/
+    # m7_quad.gltf are both too simple to meaningfully demonstrate mesh simplification).
     set(_pi_engine_mesh_sources
         "${CMAKE_SOURCE_DIR}/assets/m1_cube.glb"
         "${CMAKE_SOURCE_DIR}/assets/m7_quad.gltf"
+        "${CMAKE_SOURCE_DIR}/assets/m7_lod_sphere.gltf"
     )
     set(_pi_engine_cooked_meshes "")
     foreach(mesh_source ${_pi_engine_mesh_sources})

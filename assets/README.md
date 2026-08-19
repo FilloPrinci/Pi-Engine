@@ -23,6 +23,11 @@ see `engine/include/engine/renderer/README.md`.
 - `m7_checker.png` (+ `.meta`) — done (M7, textures step): a small (64x64) hand-generated
   RGBA checkerboard, test input for `cooker texture` / `samples/m7_textures` -- visually
   confirms UV mapping/sampling orientation at a glance. Not art, just a debug pattern.
+- `m7_lod_sphere.gltf` (+ `.meta`) — done (M7, LOD-generation step): a hand-generated
+  subdivided icosphere (642 vertices, 1280 triangles, POSITION+NORMAL, embedded base64
+  buffer like `m7_quad.gltf`) -- `m1_cube.glb`/`m7_quad.gltf` are both far too simple to
+  show a visible difference between `cooker mesh`'s generated LOD levels. Used only by
+  `samples/m7_lod`.
 
 Everything here stays git-friendly source (glTF/GLB, PNG/TGA, WAV, `.meta` sidecars) — no
 cooked/compressed binaries belong in this repo (`assets_cooked/` is gitignored, generated

@@ -85,6 +85,7 @@ Pi-Engine/
 │   ├── m3_hello_script/  m4_hello_physics/  m5_vertical_slice/
 │   ├── m7_scene_and_prefab/    # post-vertical-slice Asset Pipeline step (M7 2/5)
 │   ├── m7_textures/            # post-vertical-slice Asset Pipeline step (M7 4/5)
+│   ├── m7_lod/                 # post-vertical-slice Asset Pipeline step (M7 5/5)
 ├── tools/
 │   └── cooker/                 # offline Asset Cooker CLI (M6, docs/01 section 12.4)
 ├── assets/                     # raw source assets (docs/01 section 12.1)
@@ -108,6 +109,7 @@ Pi-Engine/
 | doctest | Unit testing | vcpkg |
 | nlohmann-json | Asset sidecar (`.meta`)/scene+prefab serialization | vcpkg (header-only); `tools/cooker` (sidecar) and `engine_core`'s `scene/` module (scene/prefab JSON, read at runtime) |
 | shaderc | GLSL → SPIR-V compilation | vcpkg; `tools/cooker` only (`cooker shader`, replaces each sample's own direct `glslc` invocation) |
+| meshoptimizer | Mesh LOD generation + vertex-cache optimization | vcpkg; `tools/cooker` only (`cooker mesh`) |
 
 ## 8. Milestone roadmap (current project status)
 

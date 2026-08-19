@@ -6,16 +6,22 @@
   this is offline-only: `tools/cooker` compiles this exact file directly as one of its
   own sources (not linked via `engine_core`, see that tool's `CMakeLists.txt`) to read the
   glTF source; no sample calls `LoadMesh()` at runtime anymore, they all load the cooked
-  output instead (cache-vertex optimization via meshoptimizer is still deferred, docs/01
-  section 12.2).
+  output instead. `LoadMesh()` itself still only ever produces one "LOD0" mesh --
+  vertex-cache optimization and LOD generation both happen downstream, in
+  `tools/cooker/CookMesh.cpp`, via meshoptimizer (M7 LOD-generation step).
 - `CookedMesh.h` + `.cpp` -- done (M6, extended M7): the minimal binary format
   `tools/cooker` writes and `LoadCookedMesh()` reads back -- "the shipped game only loads
   Cooked Assets" (docs/01 section 12.1) starting with meshes. Format version 2 embeds the
   source asset's `asset::AssetGuid` in the header (`LoadCookedMesh()`'s `outGuid`
   parameter is optional since nothing resolves an asset *by* GUID at runtime yet); version
-  3 (textures step) grew `Vertex` by a `uv` field. Still no vertex-cache optimization,
-  LOD, per-hardware-profile variants, or compression -- see the header's own comment for
-  why each is deferred.
+  3 (textures step) grew `Vertex` by a `uv` field; version 4 (LOD-generation step)
+  replaced the single top-level index buffer with `lodCount` index buffers sharing one
+  vertex buffer (`WriteCookedMeshLODs()`/`LoadCookedMesh()`'s `lodIndex` parameter,
+  default 0 -- the highest detail, so every pre-LOD call site is unaffected;
+  `GetCookedMeshLODCount()` reports how many exist). Still no per-hardware-profile
+  variants (no Hardware Profile System built yet to pick a LOD by distance/tier at
+  runtime -- `samples/m7_lod` only demonstrates manual switching) or compression -- see
+  the header's own comment for why each remaining piece is deferred.
 - `CookedTexture.h` + `.cpp` -- done (M7, textures step): mirrors `CookedMesh.h` for
   textures -- the binary format `cooker texture` writes and `LoadCookedTexture()` reads
   back. Always tightly packed RGBA8, no mipmaps, no block compression (ETC2/BC7, docs/01

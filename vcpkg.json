@@ -16,6 +16,7 @@
     "imgui",
     "doctest",
     "nlohmann-json",
-    "shaderc"
+    "shaderc",
+    "meshoptimizer"
   ]
 }

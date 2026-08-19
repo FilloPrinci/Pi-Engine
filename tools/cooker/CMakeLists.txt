@@ -3,13 +3,14 @@
 # actually needs (MeshLoader.cpp for cgltf parsing, CookedMesh.cpp/CookedTexture.cpp for
 # the binary writers, AssetGuid.cpp for the persistent asset id) directly as its own
 # sources, so the tool's link graph is just cgltf + stb_image + glm + nlohmann-json +
-# shaderc -- none of engine_core's Vulkan/SDL2/Jolt dependencies, matching the design
-# doc's "the heavy conversion libraries never end up in the shipped game" (the Cooker
-# isn't shipped either, but this also means it builds and runs without ever needing a
-# display/GPU).
+# shaderc + meshoptimizer -- none of engine_core's Vulkan/SDL2/Jolt dependencies, matching
+# the design doc's "the heavy conversion libraries never end up in the shipped game" (the
+# Cooker isn't shipped either, but this also means it builds and runs without ever needing
+# a display/GPU).
 find_package(glm CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED) # AssetImporter.cpp's .meta sidecar (M7)
 find_package(unofficial-shaderc CONFIG REQUIRED) # CookShader.cpp's GLSL->SPIR-V compile (M7)
+find_package(meshoptimizer CONFIG REQUIRED) # CookMesh.cpp's LOD generation (M7)
 
 add_executable(cooker
     AssetImporter.cpp
@@ -26,7 +27,7 @@ target_include_directories(cooker PRIVATE
     "${CMAKE_SOURCE_DIR}/engine/include"
     "${CMAKE_SOURCE_DIR}/third_party" # cgltf.h/stb_image.h, vendored (see MeshLoader.cpp/CookTexture.cpp)
 )
-target_link_libraries(cooker PRIVATE glm::glm nlohmann_json::nlohmann_json unofficial::shaderc::shaderc)
+target_link_libraries(cooker PRIVATE glm::glm nlohmann_json::nlohmann_json unofficial::shaderc::shaderc meshoptimizer::meshoptimizer)
 target_compile_features(cooker PRIVATE cxx_std_20)
 pi_engine_set_warnings(cooker)
 

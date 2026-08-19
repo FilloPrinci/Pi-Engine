@@ -6,7 +6,7 @@ milestone). Standalone CLI, not linked to `engine_core` -- compiles
 `engine/src/renderer/{MeshLoader,CookedMesh,CookedTexture}.cpp` directly as its own
 sources instead, plus its own `AssetImporter.cpp`/`CookMesh.cpp`/`CookShader.cpp`/
 `CookTexture.cpp`, so its link graph is just cgltf + stb_image + glm + nlohmann-json +
-shaderc (no Vulkan/SDL2/Jolt).
+shaderc + meshoptimizer (no Vulkan/SDL2/Jolt).
 
 Subcommands:
 
@@ -37,18 +37,27 @@ regardless of the source's actual channel count) and writes
 compression (ETC2/BC7, docs/01 section 12.2) -- same "deliberately minimal" scope as
 `cooker mesh`.
 
+`mesh` also runs the loaded mesh through `meshoptimizer` (docs/01 section 12.2: "optimizes
+vertex order for the GPU cache... automatically generates the LOD levels... by decimating
+the mesh"): LOD0 is vertex-cache optimized as-is; LOD1/LOD2 are decimated to roughly
+50%/25% of LOD0's triangle count via `meshopt_simplify` against LOD0 directly (not
+cascaded through each other), then vertex-cache optimized too. All LODs share the same
+vertex buffer -- `engine::renderer::CookedMesh.h` version 4 stores one vertex buffer plus
+`lodCount` index buffers, since simplification only ever needs to shrink the index buffer.
+
 Wired into the main build via `cmake/CookAssets.cmake`: every sample depends on the shared
 `cooked_assets` (meshes), `cooked_shaders` (shaders), and `cooked_textures` (textures)
 targets, which cook every source under `assets/`/`shaders/` into `<build dir>/assets_cooked/`
 once (CMake `OUTPUT`/`DEPENDS` tracking gives incremental re-cooking for free).
 
-M6/M7 scope so far: meshes, shaders, and now textures -- no vertex-cache optimization
-(meshoptimizer), no LOD generation, no per-hardware-profile output, no mipmaps/block
-compression, no audio/scene cooking yet, no GUID -> cooked-path manifest/resolution at
-runtime beyond what `engine::scene` already does for meshes -- see
-`engine/include/engine/renderer/CookedMesh.h`'s, `CookedTexture.h`'s, and
-`engine/include/engine/asset/README.md`'s own comments for why each remaining piece is
-deferred.
+M6/M7 scope, complete as of the LOD-generation step: meshes (with LODs), shaders, and
+textures -- still no per-hardware-profile output (no Hardware Profile System built yet to
+consume it -- `samples/m7_lod` only demonstrates *manual* LOD switching, nothing picks one
+automatically by distance/tier), no mipmaps/block texture compression, no audio/scene
+cooking, no GUID -> cooked-path manifest/resolution at runtime beyond what `engine::scene`
+already does for meshes -- see `engine/include/engine/renderer/CookedMesh.h`'s,
+`CookedTexture.h`'s, and `engine/include/engine/asset/README.md`'s own comments for why
+each remaining piece is deferred.
 
 Only built for the host (skipped while cross-compiling, see root `CMakeLists.txt` and this
 directory's parent comment in `cmake/CookAssets.cmake`) -- a build-time tool has to run on

@@ -46,7 +46,9 @@ requirements never leak onto the rest of the Editor's own source files); "Play i
 runs the same flow under `gdb`. A follow-up analysis,
 [`docs/07-unity-parity-analysis.md`](docs/07-unity-parity-analysis.md), maps what it would
 take to bring the Editor closer to Unity's own feature set and prioritizes those gaps
-against this project's actual goals.
+against this project's actual goals — the first of which is now done: scene JSON gained a
+`"scripts"` field, and Play Mode runs real gameplay scripts (`editor/scripts/RotateScript.h`)
+through a proper Script phase, not just physics/rendering.
 
 ## Prerequisites
 

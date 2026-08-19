@@ -74,6 +74,17 @@ EntityDesc ParseEntity(const nlohmann::json& json) {
         desc.rigidbodyMass = rigidbody.value("mass", desc.rigidbodyMass);
     }
 
+    if (json.contains("scripts")) {
+        const auto& scripts = json.at("scripts");
+        if (scripts.is_array()) {
+            for (const auto& scriptNameJson : scripts) {
+                if (scriptNameJson.is_string()) {
+                    desc.scriptNames.push_back(scriptNameJson.get<std::string>());
+                }
+            }
+        }
+    }
+
     return desc;
 }
 
@@ -117,6 +128,10 @@ nlohmann::json WriteEntity(const EntityDesc& desc) {
         rigidbody["isStatic"] = desc.rigidbodyIsStatic;
         rigidbody["mass"] = desc.rigidbodyMass;
         entityJson["rigidbody"] = rigidbody;
+    }
+
+    if (!desc.scriptNames.empty()) {
+        entityJson["scripts"] = desc.scriptNames;
     }
 
     return entityJson;
@@ -226,7 +241,8 @@ std::vector<EntityDesc> ExtractEntityDescs(const ecs::World& world) {
 
 std::vector<ecs::Entity> SpawnEntities(ecs::World& world, const std::vector<EntityDesc>& entities,
                                        const glm::vec3& positionOffset,
-                                       const CreatePhysicsBodyFn& createPhysicsBody) {
+                                       const CreatePhysicsBodyFn& createPhysicsBody,
+                                       const AttachScriptFn& attachScript) {
     std::vector<ecs::Entity> spawned;
     spawned.reserve(entities.size());
 
@@ -270,6 +286,12 @@ std::vector<ecs::Entity> SpawnEntities(ecs::World& world, const std::vector<Enti
                                      "both, no Jolt body created\n");
             } else {
                 createPhysicsBody(world, entity, desc.rigidbodyIsStatic);
+            }
+        }
+
+        if (!desc.scriptNames.empty() && attachScript) {
+            for (const std::string& scriptName : desc.scriptNames) {
+                attachScript(world, entity, scriptName);
             }
         }
 

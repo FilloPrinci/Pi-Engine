@@ -6,6 +6,9 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <string>
+#include <vector>
+
 namespace engine::scene {
 
 // Plain-data description of one entity, parsed from a scene/prefab JSON document
@@ -16,10 +19,15 @@ namespace engine::scene {
 // physics/PhysicsWorld.h stays Jolt-free.
 //
 // v1 scope (docs/01 section 12.2, 13.4): Transform + Mesh (by GUID) + Collider +
-// Rigidbody only. No script attachment yet (Scene::Load would need an InputSystem/
-// PhysicsWorld* just to Attach() one, and no sample needs a scripted scene entity yet --
-// see docs/01 section 13.4's own "v1 scope: one-way synchronization" precedent for
-// deliberately trimming Prefab's first version).
+// Rigidbody + Scripts (by name only). `scriptNames` follows the exact same reasoning
+// `CreatePhysicsBodyFn` already established for Rigidbody -- SpawnEntities() takes an
+// optional `AttachScriptFn` callback (SceneDocument.h) instead of depending on
+// engine::script directly, so engine/scene/ still never needs to include a single
+// script/ header. What's still *not* here: EXPOSE()d field overrides per instance (this
+// only says *which* script types to attach, each starting from its own compiled-in
+// defaults) -- `engine::script::ExposedFieldRegistry` (script/Expose.h) only tracks
+// {name, type} metadata for a future Inspector to list, it has no generic per-instance
+// get/set-by-name mechanism yet for a scene document to target.
 struct EntityDesc {
     glm::vec3 position = glm::vec3(0.0f);
     glm::quat rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
@@ -38,6 +46,13 @@ struct EntityDesc {
     bool hasRigidbody = false;
     bool rigidbodyIsStatic = true;
     float rigidbodyMass = 1.0f;
+
+    // Script type names (REGISTER_SCRIPT's own name, e.g. "RotateScript") to attach, in
+    // order. Whatever loads this scene must have each named script's class actually
+    // compiled into its own binary already -- there is no runtime C++ hot-reload in this
+    // engine (docs/01 section 6.1), so "data-driven" here means "which of the scripts
+    // already linked into this executable to use", not "load arbitrary new code".
+    std::vector<std::string> scriptNames;
 };
 
 } // namespace engine::scene

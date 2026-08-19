@@ -8,6 +8,8 @@
 
 #include <cstdio>
 #include <fstream>
+#include <iterator>
+#include <string>
 
 using engine::asset::AssetGuid;
 using engine::ecs::ColliderComponent;
@@ -83,6 +85,28 @@ TEST_CASE("ParseSceneDocument reads transform, mesh, collider, and rigidbody fie
     CHECK(second.colliderIsTrigger);
 }
 
+TEST_CASE("ParseSceneDocument reads a \"scripts\" array of names") {
+    ScopedTempFile file("scene_document_scripted.tmp.json", R"({
+        "entities": [
+            {
+                "transform": {"position": [0.0, 0.0, 0.0]},
+                "scripts": ["RotateScript", "SecondScript"]
+            },
+            {
+                "transform": {"position": [1.0, 0.0, 0.0]}
+            }
+        ]
+    })");
+
+    std::vector<EntityDesc> entities;
+    REQUIRE(ParseSceneDocument(file.m_path, entities));
+    REQUIRE(entities.size() == 2);
+    REQUIRE(entities[0].scriptNames.size() == 2);
+    CHECK(entities[0].scriptNames[0] == "RotateScript");
+    CHECK(entities[0].scriptNames[1] == "SecondScript");
+    CHECK(entities[1].scriptNames.empty()); // no "scripts" block at all -- not an error
+}
+
 TEST_CASE("ParseSceneDocument rejects a missing file") {
     std::vector<EntityDesc> entities;
     CHECK_FALSE(ParseSceneDocument("this_scene_does_not_exist.json", entities));
@@ -133,6 +157,35 @@ TEST_CASE("SpawnEntities applies positionOffset on top of each EntityDesc's own 
         SpawnEntities(world, descs, glm::vec3(10.0f, 0.0f, 0.0f), nullptr);
     REQUIRE(spawned.size() == 1);
     CHECK(world.GetTransform(spawned[0])->position == glm::vec3(11.0f, 0.0f, 0.0f));
+}
+
+TEST_CASE("SpawnEntities calls AttachScriptFn once per scriptName, in order") {
+    World world;
+    std::vector<EntityDesc> descs(1);
+    descs[0].scriptNames = {"First", "Second"};
+
+    std::vector<std::string> attachedNames;
+    auto attachScript = [&](World&, Entity, const std::string& name) {
+        attachedNames.push_back(name);
+    };
+    const std::vector<Entity> spawned =
+        SpawnEntities(world, descs, glm::vec3(0.0f), {}, attachScript);
+    REQUIRE(spawned.size() == 1);
+    REQUIRE(attachedNames.size() == 2);
+    CHECK(attachedNames[0] == "First");
+    CHECK(attachedNames[1] == "Second");
+}
+
+TEST_CASE("SpawnEntities silently skips scriptNames when no AttachScriptFn is given") {
+    World world;
+    std::vector<EntityDesc> descs(1);
+    descs[0].scriptNames = {"SomeScript"};
+
+    // Must not crash/assert -- an empty AttachScriptFn is the documented default (a
+    // read-only Scene View never wires one up, see SceneDocument.h's own comment).
+    const std::vector<Entity> spawned = SpawnEntities(world, descs, glm::vec3(0.0f));
+    REQUIRE(spawned.size() == 1);
+    CHECK(world.IsAlive(spawned[0]));
 }
 
 TEST_CASE("LoadScene spawns every entity described in the file") {
@@ -224,6 +277,47 @@ TEST_CASE("SaveScene persists a live edit made after LoadScene") {
     REQUIRE(ParseSceneDocument(file.m_path, reloaded));
     REQUIRE(reloaded.size() == 2);
     CHECK(reloaded[0].position == glm::vec3(42.0f, 0.0f, 0.0f));
+}
+
+TEST_CASE("WriteSceneDocument round-trips a \"scripts\" array") {
+    EntityDesc desc;
+    desc.scriptNames = {"RotateScript"};
+
+    ScopedTempFile file("scene_document_scripts_roundtrip.tmp.json", "");
+    REQUIRE(WriteSceneDocument(file.m_path, {desc}));
+
+    std::vector<EntityDesc> reloaded;
+    REQUIRE(ParseSceneDocument(file.m_path, reloaded));
+    REQUIRE(reloaded.size() == 1);
+    REQUIRE(reloaded[0].scriptNames.size() == 1);
+    CHECK(reloaded[0].scriptNames[0] == "RotateScript");
+}
+
+TEST_CASE("WriteSceneDocument omits \"scripts\" entirely when empty (no empty array noise)") {
+    EntityDesc desc; // scriptNames left default-empty
+    ScopedTempFile file("scene_document_no_scripts.tmp.json", "");
+    REQUIRE(WriteSceneDocument(file.m_path, {desc}));
+
+    std::ifstream in(file.m_path);
+    std::string contents((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    CHECK(contents.find("scripts") == std::string::npos);
+}
+
+TEST_CASE("ExtractEntityDescs cannot recover scriptNames -- dropped on a Save round-trip, "
+          "same documented gap as Rigidbody's isStatic") {
+    ScopedTempFile sourceFile("scene_scripts_extract_source.tmp.json", R"({
+        "entities": [
+            {"transform": {"position": [0.0, 0.0, 0.0]}, "scripts": ["RotateScript"]}
+        ]
+    })");
+    World world;
+    // No AttachScriptFn -- matches the Editor's own read-only Scene View, which never
+    // attaches scripts either (see SceneDocument.h's ExtractEntityDescs comment).
+    REQUIRE(LoadScene(sourceFile.m_path, world));
+
+    const std::vector<EntityDesc> extracted = ExtractEntityDescs(world);
+    REQUIRE(extracted.size() == 1);
+    CHECK(extracted[0].scriptNames.empty());
 }
 
 TEST_CASE("WriteSceneDocument rejects an unwritable path") {

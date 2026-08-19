@@ -8,6 +8,7 @@
 #include "engine/jobs/JobSystem.h"
 #include "engine/physics/PhysicsPhase.h"
 #include "engine/physics/PhysicsWorld.h"
+#include "engine/platform/InputSystem.h"
 #include "engine/platform/SDL2DisplayBackend.h"
 #include "engine/renderer/CookedMesh.h"
 #include "engine/renderer/ForwardLitPipeline.h"
@@ -15,6 +16,10 @@
 #include "engine/rhi/RHIContext.h"
 #include "engine/rhi/RHISwapchain.h"
 #include "engine/scene/Scene.h"
+#include "engine/script/ScriptComponent.h"
+#include "engine/script/ScriptRegistry.h"
+
+#include "scripts/RotateScript.h"
 
 #include <imgui.h>
 #include <volk.h>
@@ -40,6 +45,7 @@ using engine::ecs::World;
 using engine::jobs::JobSystem;
 using engine::physics::PhysicsPhase;
 using engine::physics::PhysicsWorld;
+using engine::platform::InputSystem;
 using engine::platform::Key;
 using engine::platform::SDL2DisplayBackend;
 using engine::renderer::ForwardLitPipeline;
@@ -47,6 +53,8 @@ using engine::renderer::MeshData;
 using engine::rhi::RHIBuffer;
 using engine::rhi::RHIContext;
 using engine::rhi::RHISwapchain;
+using engine::script::ScriptComponent;
+using engine::script::ScriptRegistry;
 
 namespace {
 
@@ -100,13 +108,15 @@ struct MeshGpuData {
 // hot-reload in this engine (docs/01 section 6.1), so Play can never simulate *inside* the
 // running Editor process the way Unity does -- a separate process is the only option, the
 // same reason Editor step E7's Project Hub relaunches into a new process rather than
-// hot-swapping the loaded scene. A second, structural gap specific to Play (not shared
-// with E7's relaunch): scene JSON (engine::scene::EntityDesc) has no script field at all
-// yet -- ScriptComponents are attached in C++ code (see every m3-m5 sample), never from
-// scene data -- so this renders and simulates physics for the open scene exactly as
-// authored, but no gameplay scripts run unless a future engine::scene format revision
-// adds a data-driven script-attachment field. Documented as a real gap, not silently
-// papered over (see docs/07-unity-parity-analysis.md).
+// hot-swapping the loaded scene. Runs a real Script phase now too (scene JSON's
+// EntityDesc::scriptNames, attached via AttachScriptFn -- docs/07-unity-parity-analysis.md's
+// former "data-driven scripting: missing" row), same phase order as m5_vertical_slice
+// (Script -> barrier -> Physics -> barrier -> Collision Callback). The one remaining,
+// structural limit: "data-driven" still means "already compiled into this executable",
+// never true hot-loadable scripting -- a scene can only reference a script type
+// editor_play itself was built with (today: RotateScript.h, see its own comment). A scene
+// authored against a script type that isn't linked in just skips that attachment with a
+// stderr warning, same "degrade, don't crash" precedent as everything else in this file.
 //
 // Usage: `editor_play <scene.json>` -- no default path (unlike `editor`'s own optional
 // argv[1]): always launched by BuildPipeline.cpp with an explicit scene, never by hand.
@@ -193,16 +203,44 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     PhysicsPhase physicsPhase; // default fixed step: 1/60 s (docs/01 section 9.4)
+    InputSystem inputSystem;
+
+    // Scripts (docs/07-unity-parity-analysis.md's "data-driven scripting" gap, first
+    // addressed here): engine::scene owns none of these -- SpawnEntities() only calls
+    // AttachScriptFn per EntityDesc::scriptNames entry, this process is what actually
+    // keeps the created ScriptComponents alive and drives their OnUpdate() (Script phase,
+    // below, mirroring m5_vertical_slice's exact phase order). RotateScript.h is the one
+    // script type currently linked into editor_play -- see its own comment for why it's
+    // generic rather than demo-specific like samples/m3-m5's own scripts.
+    std::vector<std::unique_ptr<ScriptComponent>> scripts;
+    std::vector<ScriptComponent*> scriptPtrs; // Same objects as `scripts`, non-owning --
+                                               // DispatchCollisionCallbacks() below wants
+                                               // raw pointers, rebuilt fresh every frame
+                                               // would be wasted work for no reason.
+    auto attachScript = [&](World& w, Entity entity, const std::string& scriptName) {
+        std::unique_ptr<ScriptComponent> script = ScriptRegistry::Create(scriptName);
+        if (!script) {
+            std::fprintf(stderr,
+                         "play: scene references script \"%s\", but no REGISTER_SCRIPT(%s) "
+                         "is linked into editor_play -- skipping it\n",
+                         scriptName.c_str(), scriptName.c_str());
+            return;
+        }
+        script->Attach(w, entity, inputSystem, &physicsWorld);
+        script->OnStart();
+        scriptPtrs.push_back(script.get());
+        scripts.push_back(std::move(script));
+    };
 
     auto createPhysicsBody = [&](World& w, Entity entity, bool isStatic) {
         physicsWorld.CreateBody(w, entity, isStatic);
     };
-    if (!engine::scene::LoadScene(scenePath.c_str(), world, createPhysicsBody)) {
+    if (!engine::scene::LoadScene(scenePath.c_str(), world, createPhysicsBody, attachScript)) {
         std::fprintf(stderr, "play: failed to load scene \"%s\"\n", scenePath.c_str());
         return EXIT_FAILURE;
     }
-    std::printf("play: loaded scene \"%s\" (%zu mesh entities)\n", scenePath.c_str(),
-                world.Meshes().Data().size());
+    std::printf("play: loaded scene \"%s\" (%zu mesh entities, %zu script(s))\n",
+                scenePath.c_str(), world.Meshes().Data().size(), scripts.size());
 
     const VkFormat depthFormat = ChooseDepthFormat(context.GetPhysicalDevice());
     if (depthFormat == VK_FORMAT_UNDEFINED) {
@@ -460,12 +498,19 @@ int main(int argc, char** argv) {
             displayBackend.RequestQuit();
         }
 
-        // The Physics phase from CLAUDE.md section 4 (Script phase is a no-op here -- see
-        // PlayRuntime.h -- so this starts straight at Physics): PhysicsPhase::Update() is
-        // itself the barrier (its own comment explains why), SyncTransforms() is
-        // Post-Physics.
+        // The full phase sequence from CLAUDE.md section 4, same order as
+        // m5_vertical_slice: Script phase -> barrier -> Physics phase -> barrier ->
+        // Collision Callback phase -> Post-Physics. inputSystem.Update() must run before
+        // any script's OnUpdate() reads it (docs/01 section 11.4: input read once per
+        // frame, before Script).
+        inputSystem.Update(input);
+        for (const std::unique_ptr<ScriptComponent>& script : scripts) {
+            script->OnUpdate(deltaSeconds);
+        }
+
         physicsPhase.Update(physicsWorld, world, deltaSeconds);
         physicsWorld.SyncTransforms(world);
+        physicsWorld.DispatchCollisionCallbacks(scriptPtrs);
 
         overlay.NewFrame();
         console.Update();
@@ -643,6 +688,10 @@ int main(int argc, char** argv) {
     application.Run(displayBackend, callbacks);
 
     vkDeviceWaitIdle(device);
+
+    for (const std::unique_ptr<ScriptComponent>& script : scripts) {
+        script->OnDestroy();
+    }
 
     for (int i = 0; i < kMaxFramesInFlight; ++i) {
         vkDestroySemaphore(device, imageAvailable[i], nullptr);

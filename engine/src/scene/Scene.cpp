@@ -2,12 +2,13 @@
 
 namespace engine::scene {
 
-bool LoadScene(const char* path, ecs::World& world, const CreatePhysicsBodyFn& createPhysicsBody) {
+bool LoadScene(const char* path, ecs::World& world, const CreatePhysicsBodyFn& createPhysicsBody,
+               const AttachScriptFn& attachScript) {
     std::vector<EntityDesc> entities;
     if (!ParseSceneDocument(path, entities)) {
         return false;
     }
-    SpawnEntities(world, entities, glm::vec3(0.0f), createPhysicsBody);
+    SpawnEntities(world, entities, glm::vec3(0.0f), createPhysicsBody, attachScript);
     return true;
 }
 

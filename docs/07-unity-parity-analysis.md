@@ -29,7 +29,7 @@
 | Console panel | Have (minimal) | Filtering by severity, click-to-source, stack traces, collapse duplicates | Scrollback with stderr highlighted red, Clear button — no filtering/collapsing/click-to-source (E5) |
 | Project Hub / multi-project | Partial | Installed-once engine, many independent project folders, per-project engine version pin | Recent-scenes list + one-process-per-scene relaunch; no real multi-project packaging since Pi-Engine has no install/export target at all (E7) |
 | Play Mode | Partial (deliberate) | Simulates in-place inside the Editor process, editable while playing, exact same window | Launches a genuinely separate process (`editor_play`) with no Editor panels (E8) — **not a gap to close**: there is no C++ hot-reload in this engine, so in-place simulation was never architecturally possible; closing it would mean adding hot-reload, a far larger undertaking than Play Mode itself |
-| Data-driven scripting | Missing | Any MonoBehaviour can be added to any GameObject from the Editor, no recompile | `ScriptComponent`s are attached in C++ (`REGISTER_SCRIPT`/`EXPOSE`, `docs/01` section 8) — scene JSON (`EntityDesc`) has no script-attachment field, so Play Mode (E8) can render/simulate physics for a scene but never runs its gameplay scripts |
+| Data-driven scripting | Partial | Any MonoBehaviour can be added to any GameObject from the Editor, no recompile | Scene JSON now has a `"scripts": [name, ...]` field (`EntityDesc::scriptNames`) that Play Mode (`editor_play`) attaches via `ScriptRegistry::Create()` and runs every frame (Script phase, before Physics) — real progress, but still not attachable from the Inspector (only by hand-editing JSON) and still bounded by the same structural limit as the row below: a scene can only reference a script type already compiled into `editor_play`'s own binary (today: `editor/scripts/RotateScript.h`), never truly hot-loadable code |
 | Prefab Editor UI | Missing | Visual Prefab editing, nested prefabs, overrides | `engine::scene::Prefab`/`.prefab.json` exist and instantiate correctly (M7), but only from code (`samples/m7_scene_and_prefab`) — no Editor UI to create/edit one |
 | Material/Shader system | Missing (structural) | Material assets, shader graphs, per-material parameter editing in Inspector | No material asset concept at all — `ForwardLitPipeline`/`ForwardLitTexturedPipeline` are hardcoded C++ classes (`CLAUDE.md` rule 7: "every rendering pipeline is a separate concrete class, never an uber-shader with branching"); adding a data-driven material would be a Renderer-level change, not an Editor-level one |
 | Animation | Missing | Animator/Animation windows, state machines, timeline | No animation system in the engine at all yet |
@@ -57,9 +57,12 @@ not by how large the gap looks above:
    vehicle's wheels, a character's held item). This is an ECS-level change first
    (`TransformComponent` needs a parent field and the renderer/physics needs to compose
    world transforms), not just an Editor UI change — bigger than it looks from the table.
-3. **Data-driven script attachment.** Without this, Play Mode (E8) can only ever preview
-   physics/rendering, never real gameplay — the single biggest thing standing between
-   today's Editor and "press Play and actually play the game."
+3. ~~Data-driven script attachment.~~ **Done** (scene JSON's `"scripts"` field, attached
+   and run by Play Mode) — Play (E8) can now run real gameplay for any script type
+   `editor_play` was built with, not just preview physics/rendering. What's left here
+   (Inspector-driven attach/detach + EXPOSE()d field overrides from the scene document,
+   instead of hand-editing JSON) is smaller than what shipped, so it's dropped off this
+   top-5 list rather than kept at the top.
 4. **Undo/Redo.** Cheap relative to its payoff once (1)-(2) exist — an Editor without undo
    actively discourages experimentation, which cuts against "accessible" (`CLAUDE.md`
    section 1) more than almost anything else on this list.

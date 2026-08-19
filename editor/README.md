@@ -64,7 +64,7 @@ project/scene, the same way Unity Hub and the Unity Editor are actually two sepa
 processes rather than one process hot-swapping its loaded project. Linux only; on another
 platform the relaunch simply doesn't happen (logged, not fatal).
 
-**Step E8 (current)**: Build/Play/Debug pipeline. A **Play** button (next to Save) runs
+**Step E8**: Build/Play/Debug pipeline. A **Play** button (next to Save) runs
 `cmake --build <dir> --target editor_play`, then re-cooks (`cooked_assets`/
 `cooked_shaders`/`cooked_textures`) -- both incremental, CMake's own dependency tracking --
 and, on success, launches `editor_play` (see `play_main.cpp`'s own comment) pointed at the
@@ -81,10 +81,22 @@ nothing to do with physics (see `CMakeLists.txt`'s own comment). Play launches a
 independent process and the Editor keeps running -- unlike Unity, this engine has no
 runtime C++ hot-reload, so simulating *inside* the running Editor process was never an
 option; Play Mode here means "run the game for real, in its own window", the same
-structural choice Project Hub's relaunch already made for switching scenes. Play Mode
-renders and simulates physics for the scene exactly as authored, but no gameplay scripts
-run -- scene JSON has no script-attachment field yet, a real gap, not silently papered
-over (see `docs/07-unity-parity-analysis.md`).
+structural choice Project Hub's relaunch already made for switching scenes.
+
+**Post-E8**: data-driven script attachment (`docs/07-unity-parity-analysis.md`'s former
+"data-driven scripting: missing" row). Scene JSON gained a `"scripts": [name, ...]` field
+(`engine::scene::EntityDesc::scriptNames`); `editor_play` attaches each one via
+`ScriptRegistry::Create()` and runs a real Script phase every frame (before Physics, same
+order as `samples/m5_vertical_slice`), so Play Mode now runs actual gameplay code, not just
+physics/rendering. `editor/scripts/RotateScript.h` is the one script type linked into
+`editor_play` so far -- generic and reusable (unlike samples/m3-m5's own demo-specific
+scripts), spinning its entity at a constant rate, `EXPOSE()`d for a future Inspector. The
+demo scene's middle cube references it (`editor/assets/demo.scene.json`) as a live example.
+One structural limit remains, unavoidable without runtime C++ hot-reload (docs/01 section
+6.1): a scene can only reference a script type already compiled into `editor_play`'s own
+binary -- "data-driven" here means *which* linked-in script to use, never truly
+hot-loadable code. A scene referencing an unknown script name just skips it with a stderr
+warning rather than failing to load.
 
 Mesh resolution is a placeholder GUID → GPU-buffers cache (same pattern as
 `samples/m7_scene_and_prefab`) that only knows about `m1_cube.mesh` — a real GUID →

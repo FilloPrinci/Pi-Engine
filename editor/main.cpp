@@ -2,6 +2,7 @@
 #include "engine/core/Application.h"
 #include "engine/core/Camera.h"
 #include "engine/core/EngineVersion.h"
+#include "engine/debug/Console.h"
 #include "engine/debug/ImGuiOverlay.h"
 #include "engine/ecs/World.h"
 #include "engine/platform/SDL2DisplayBackend.h"
@@ -29,6 +30,7 @@
 using engine::asset::AssetGuid;
 using engine::core::Application;
 using engine::core::Camera;
+using engine::debug::Console;
 using engine::debug::ImGuiOverlay;
 using engine::ecs::ColliderComponent;
 using engine::ecs::Entity;
@@ -95,7 +97,20 @@ struct MeshGpuData {
 // Usage: `editor [path/to/scene.json]` -- defaults to editor/assets/demo.scene.json if no
 // path is given (no Project Hub yet to remember "the last opened project", Editor step E7).
 int main(int argc, char** argv) {
+    // Console::Init() must run before any other stdout/stderr I/O (see its own comment on
+    // why) -- literally the first statement in main(), ahead of even the version printf
+    // below. Not fatal if it fails (non-POSIX platform, or the redirect itself failed):
+    // the Console panel just stays empty/disabled, everything else still runs normally
+    // and still prints to the real terminal (see Console.h's "degrade, don't hard-fail").
+    Console console;
+    const bool consoleAvailable = console.Init();
+
     std::printf("Pi-Engine %s -- Editor\n", engine::core::GetEngineVersionString());
+    if (!consoleAvailable) {
+        std::fprintf(stderr, "editor: Console capture not available on this platform -- the "
+                             "Console panel will stay empty (output still reaches this "
+                             "terminal normally)\n");
+    }
 
     const std::string scenePath = argc > 1 ? argv[1] : EditorAssetPath("demo.scene.json");
 
@@ -428,6 +443,7 @@ int main(int argc, char** argv) {
         }
 
         overlay.NewFrame();
+        console.Update();
 
         ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_FirstUseEver);
         ImGui::Begin("Pi-Engine Editor");
@@ -514,6 +530,39 @@ int main(int argc, char** argv) {
             }
         } else {
             ImGui::TextUnformatted("No entity selected -- click one in the Scene panel.");
+        }
+        ImGui::End();
+
+        // --- Console panel (Editor step E5): every stdout/stderr line the engine has
+        //     printed since Console::Init() (main()'s first statement), stderr lines
+        //     highlighted red. Not a new logging API -- every existing
+        //     std::printf/std::fprintf(stderr, ...) call site across the engine is
+        //     captured as-is (Console.h's own comment explains how). ---
+        ImGui::SetNextWindowPos(ImVec2(10.0f, 470.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(700.0f, 220.0f), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Console");
+        if (!consoleAvailable) {
+            ImGui::TextUnformatted("Console capture not available on this platform.");
+        } else {
+            if (ImGui::Button("Clear")) {
+                console.Clear();
+            }
+            ImGui::SameLine();
+            ImGui::Text("%zu line(s)", console.GetLines().size());
+            ImGui::Separator();
+            ImGui::BeginChild("ConsoleScroll", ImVec2(0.0f, 0.0f), false,
+                              ImGuiWindowFlags_HorizontalScrollbar);
+            for (const Console::Line& line : console.GetLines()) {
+                if (line.isError) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", line.text.c_str());
+                } else {
+                    ImGui::TextUnformatted(line.text.c_str());
+                }
+            }
+            if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
+                ImGui::SetScrollHereY(1.0f); // Auto-scroll, but only while already at the bottom.
+            }
+            ImGui::EndChild();
         }
         ImGui::End();
 
@@ -685,5 +734,8 @@ int main(int argc, char** argv) {
     displayBackend.Shutdown();
 
     std::printf("editor: clean exit.\n");
+    console.Shutdown(); // Restores the real stdout/stderr fds (also happens in ~Console()
+                        // regardless -- explicit here to match this function's own style
+                        // of always calling Shutdown() rather than relying only on RAII).
     return EXIT_SUCCESS;
 }

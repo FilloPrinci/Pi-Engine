@@ -21,7 +21,7 @@ whichever the entity actually has. Editing a field (`ImGui::DragFloat3`/`Checkbo
 mutates the live `ComponentStorage` entry directly, no separate "apply" step -- visible in
 the Scene View the very next frame.
 
-**Step E4 (current)**: Scene saving. A **Save** button (in the info window) calls
+**Step E4**: Scene saving. A **Save** button (in the info window) calls
 `engine::scene::SaveScene()`, overwriting the currently open scene path with every
 entity's live component state -- round-trips through the exact same JSON schema
 `LoadScene`/`ParseSceneDocument` reads, no new format invented. One deliberate gap: a
@@ -33,6 +33,15 @@ for the Editor's own current scenes (nothing in it creates a Rigidbody -- E2's S
 has no `PhysicsWorld`), only for a scene document that already had one before the Editor
 loaded it. No "Save As" yet (Editor step E7's Project Hub is the more natural place to
 manage multiple scene files).
+
+**Step E5 (current)**: Console panel. Captures the engine's existing stdout/stderr output
+(`engine::debug::Console`, built this step) into a scrollable panel -- every
+`std::printf`/`std::fprintf(stderr, ...)` call site across the engine already exists and
+is captured as-is via low-level file descriptor redirection, not a new logging API
+everything would need to be rewritten to use. stderr lines are highlighted red. Output is
+teed, not replaced: redirecting the process's own output (`editor > log.txt 2>&1`) or just
+running it interactively still works exactly as before. POSIX only (Linux/macOS) -- on
+another platform the panel just stays empty rather than failing to build or run.
 
 Mesh resolution is a placeholder GUID → GPU-buffers cache (same pattern as
 `samples/m7_scene_and_prefab`) that only knows about `m1_cube.mesh` — a real GUID →

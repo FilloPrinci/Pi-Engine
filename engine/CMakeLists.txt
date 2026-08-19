@@ -53,6 +53,7 @@ add_library(engine_core STATIC
     src/core/Application.cpp
     src/core/Camera.cpp
     src/core/EngineVersion.cpp
+    src/debug/Console.cpp
     src/debug/ImGuiOverlay.cpp
     src/ecs/World.cpp
     src/ecs/components/TransformComponent.cpp

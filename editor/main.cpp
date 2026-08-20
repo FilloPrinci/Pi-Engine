@@ -29,6 +29,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <string>
@@ -96,6 +97,16 @@ std::vector<std::string> ListDirectory(const std::filesystem::path& dir, bool ex
     }
     std::sort(names.begin(), names.end());
     return names;
+}
+
+// Shared by the Scene panel's hierarchy tree and the Inspector's parent picker (post-
+// Editor-E8) -- both need to show the same human-readable name for an entity, and neither
+// has anything richer than the raw handle to name it with yet (no per-entity name field
+// exists in EntityDesc/TransformComponent).
+std::string EntityLabel(Entity entity) {
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "Entity %u.%u", entity.index, entity.generation);
+    return buffer;
 }
 
 // Same depth-format fallback chain as every sample since M1.
@@ -661,22 +672,56 @@ int main(int argc, char** argv) {
         }
         ImGui::End();
 
-        // --- Scene panel: every entity with a Transform (docs/06-editor-roadmap.md, E3)
-        //     -- every entity engine::scene::LoadScene spawns has one, so this is the
-        //     full entity list, not a filtered subset. Clicking a row selects it. Y offset
-        //     (220, was 150 through Editor step E7) leaves room below the "Pi-Engine
-        //     Editor" info window above, which grew a Play/Play in Debug row in E8. ---
+        // --- Scene panel: every entity with a Transform (docs/06-editor-roadmap.md, E3),
+        //     shown as a hierarchy tree (post-Editor-E8, docs/07-unity-parity-analysis.md)
+        //     -- root entities (TransformComponent::parent == kInvalidEntity) at the top
+        //     level, each one's children indented underneath, matching the shape of
+        //     Unity's own Hierarchy panel (always fully expanded here, no per-node
+        //     collapse -- see renderEntityNode's own comment for why). Clicking a row
+        //     still just selects it, same as the flat list this replaces. O(n)
+        //     children-of-X scan per node (so O(n^2) for the whole tree) instead of a
+        //     parent->children map -- fine at the scene sizes this project actually has;
+        //     worth revisiting if a scene ever has enough entities for that to matter. Y
+        //     offset (220, was 150 through Editor step E7) leaves room below the
+        //     "Pi-Engine Editor" info window above, which grew a Play/Play in Debug row in
+        //     E8. ---
         ImGui::SetNextWindowPos(ImVec2(10.0f, 220.0f), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(260.0f, 180.0f), ImGuiCond_FirstUseEver);
         ImGui::Begin("Scene");
         const auto& sceneEntities = world.Transforms().Entities();
-        for (const Entity entity : sceneEntities) {
-            char label[64];
-            std::snprintf(label, sizeof(label), "Entity %u.%u", entity.index, entity.generation);
-            if (ImGui::Selectable(label, entity == selectedEntity)) {
-                selectedEntity = entity;
+
+        // Deliberately not ImGui::TreeNodeEx()'s own indent-stack push/pop -- an earlier
+        // version used that (with expand/collapse arrows) and had a real indent leak bug
+        // that only showed up with 3+ siblings at the same level following a node with
+        // children (found via Pi4 screenshot testing: an unrelated *root* entity rendered
+        // visually nested, even though its own TransformComponent::parent was correctly
+        // kInvalidEntity the whole time -- a rendering bug, not a data bug, but a
+        // hierarchy panel that visually misrepresents the hierarchy defeats its own
+        // purpose). Explicit Indent()/Unindent() driven by a plain `depth` parameter is
+        // trivially balanced by construction -- every row always indents and unindents by
+        // exactly the same amount, no conditional push to ever leave unpopped. Trades away
+        // per-node collapse/expand, an acceptable simplification at the scene sizes this
+        // project actually has (a handful of entities, always cheap to show in full).
+        std::function<void(Entity, int)> renderEntityNode = [&](Entity parent, int depth) {
+            for (const Entity entity : sceneEntities) {
+                const TransformComponent* transform = world.GetTransform(entity);
+                const Entity entityParent =
+                    transform != nullptr ? transform->parent : engine::ecs::kInvalidEntity;
+                if (entityParent != parent) {
+                    continue;
+                }
+
+                const std::string label = EntityLabel(entity);
+                ImGui::Indent(static_cast<float>(depth) * 15.0f);
+                if (ImGui::Selectable(label.c_str(), entity == selectedEntity)) {
+                    selectedEntity = entity;
+                }
+                ImGui::Unindent(static_cast<float>(depth) * 15.0f);
+
+                renderEntityNode(entity, depth + 1);
             }
-        }
+        };
+        renderEntityNode(engine::ecs::kInvalidEntity, 0);
         ImGui::End();
 
         // --- Inspector panel: the selected entity's components, read-only where editing
@@ -690,6 +735,34 @@ int main(int argc, char** argv) {
         if (world.IsAlive(selectedEntity)) {
             if (TransformComponent* transform = world.GetTransform(selectedEntity)) {
                 if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    // Parent picker (post-Editor-E8, docs/07-unity-parity-analysis.md) --
+                    // "None" plus every other alive entity that isn't `selectedEntity`
+                    // itself or one of its own descendants (World::IsDescendantOf() rejects
+                    // both, since either would create a cycle in the parent chain).
+                    // Position/Rotation/Scale below are always *local* -- reparenting an
+                    // entity deliberately doesn't compensate its local values to keep it
+                    // visually in place, matching a plain drag-in-Hierarchy in Unity without
+                    // Alt held (the simpler of its two reparent behaviors).
+                    const std::string currentParentLabel = transform->parent == engine::ecs::kInvalidEntity
+                                                                ? "None"
+                                                                : EntityLabel(transform->parent);
+                    if (ImGui::BeginCombo("Parent", currentParentLabel.c_str())) {
+                        if (ImGui::Selectable("None", transform->parent == engine::ecs::kInvalidEntity)) {
+                            transform->parent = engine::ecs::kInvalidEntity;
+                        }
+                        for (const Entity candidate : world.Transforms().Entities()) {
+                            if (candidate == selectedEntity ||
+                                world.IsDescendantOf(candidate, selectedEntity)) {
+                                continue;
+                            }
+                            const std::string candidateLabel = EntityLabel(candidate);
+                            if (ImGui::Selectable(candidateLabel.c_str(),
+                                                  candidate == transform->parent)) {
+                                transform->parent = candidate;
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
                     ImGui::DragFloat3("Position", &transform->position.x, 0.05f);
                     glm::vec3 eulerDegrees = glm::degrees(glm::eulerAngles(transform->rotation));
                     if (ImGui::DragFloat3("Rotation", &eulerDegrees.x, 1.0f)) {
@@ -856,6 +929,29 @@ int main(int argc, char** argv) {
         const bool mouseOverImGui = ImGui::GetIO().WantCaptureMouse;
         const glm::vec2 mouseScreen(inputSystem.GetMouseX(), inputSystem.GetMouseY());
 
+        // Hierarchy (post-Editor-E8, docs/07-unity-parity-analysis.md): the gizmo is drawn
+        // and hit-tested at an entity's *world* position (its own local position composed
+        // through its parent chain), never its raw TransformComponent::position -- for a
+        // root entity (no parent) the two are identical, so nothing changes there.
+        auto worldPositionOf = [&](Entity entity) {
+            return glm::vec3(world.GetWorldMatrix(entity)[3]);
+        };
+        // A drag moves the entity by a *world*-space amount along a world axis (the gizmo
+        // itself is always world-aligned, see the "what's left" note in docs/07 -- no
+        // local/global toggle yet), but TransformComponent::position is local to the
+        // entity's own parent -- converting one to the other means undoing the parent's
+        // own rotation+scale (its inverse upper-left 3x3), the standard "world delta ->
+        // local delta" scene-graph conversion. A root entity's parent is identity, so this
+        // is just `worldDelta` unchanged, same as before hierarchy existed.
+        auto worldDeltaToLocal = [&](Entity entity, const glm::vec3& worldDelta) {
+            const TransformComponent* t = world.GetTransform(entity);
+            if (t == nullptr || t->parent == engine::ecs::kInvalidEntity) {
+                return worldDelta;
+            }
+            const glm::mat3 parentRotationScale = glm::mat3(world.GetWorldMatrix(t->parent));
+            return glm::inverse(parentRotationScale) * worldDelta;
+        };
+
         if (draggingAxis != GizmoAxis::None) {
             if (inputSystem.IsMouseLeftHeld()) {
                 const glm::vec2 mouseDelta = mouseScreen - dragStartMouseScreen;
@@ -870,7 +966,9 @@ int main(int argc, char** argv) {
                     axisWorld = glm::vec3(0.0f, 0.0f, 1.0f);
                 }
                 if (TransformComponent* transform = world.GetTransform(selectedEntity)) {
-                    transform->position = dragStartEntityPosition + axisWorld * worldDelta;
+                    const glm::vec3 localDelta =
+                        worldDeltaToLocal(selectedEntity, axisWorld * worldDelta);
+                    transform->position = dragStartEntityPosition + localDelta;
                 }
             }
             if (inputSystem.WasMouseLeftReleasedThisFrame()) {
@@ -882,14 +980,15 @@ int main(int argc, char** argv) {
             bool startedGizmoDrag = false;
             if (world.IsAlive(selectedEntity)) {
                 if (TransformComponent* transform = world.GetTransform(selectedEntity)) {
+                    const glm::vec3 worldPosition = worldPositionOf(selectedEntity);
                     const glm::vec3 cameraEye = glm::vec3(glm::inverse(camera.GetViewMatrix())[3]);
                     const float distanceToCamera =
-                        std::max(glm::length(transform->position - cameraEye), 0.001f);
+                        std::max(glm::length(worldPosition - cameraEye), 0.001f);
                     const float gizmoWorldLength = std::max(distanceToCamera * 0.15f, 0.3f);
 
                     bool behindCamera = false;
                     const glm::vec2 originScreen = WorldToScreen(
-                        transform->position, viewportWidth, viewportHeight, viewProj, behindCamera);
+                        worldPosition, viewportWidth, viewportHeight, viewProj, behindCamera);
 
                     struct AxisEntry {
                         GizmoAxis axis;
@@ -911,7 +1010,7 @@ int main(int argc, char** argv) {
                         for (const AxisEntry& entry : axes) {
                             bool tipBehindCamera = false;
                             const glm::vec2 tipScreen = WorldToScreen(
-                                transform->position + entry.direction * gizmoWorldLength,
+                                worldPosition + entry.direction * gizmoWorldLength,
                                 viewportWidth, viewportHeight, viewProj, tipBehindCamera);
                             if (tipBehindCamera) {
                                 continue;
@@ -959,17 +1058,22 @@ int main(int argc, char** argv) {
                 const auto& meshEntitiesForPicking = world.Meshes().Entities();
                 for (std::size_t i = 0; i < meshesForPicking.size(); ++i) {
                     const Entity candidate = meshEntitiesForPicking[i];
-                    const TransformComponent* candidateTransform = world.GetTransform(candidate);
-                    if (candidateTransform == nullptr) {
+                    if (!world.HasTransform(candidate)) {
                         continue;
                     }
+                    // World position/scale (hierarchy, post-Editor-E8) -- a child
+                    // entity's own TransformComponent::scale is *local*, so the world
+                    // matrix's basis-vector lengths are what actually determine its
+                    // on-screen (and pickable) size, not the raw local scale alone.
+                    const glm::mat4 candidateWorld = world.GetWorldMatrix(candidate);
+                    const glm::vec3 worldPosition = glm::vec3(candidateWorld[3]);
                     const float scaleMax =
-                        std::max({candidateTransform->scale.x, candidateTransform->scale.y,
-                                 candidateTransform->scale.z});
+                        std::max({glm::length(glm::vec3(candidateWorld[0])),
+                                 glm::length(glm::vec3(candidateWorld[1])),
+                                 glm::length(glm::vec3(candidateWorld[2]))});
                     const float radius = meshesForPicking[i].boundsRadius * scaleMax;
                     float t = 0.0f;
-                    if (RaySphereIntersect(rayOrigin, rayDir, candidateTransform->position, radius,
-                                           t) &&
+                    if (RaySphereIntersect(rayOrigin, rayDir, worldPosition, radius, t) &&
                         t < closestT) {
                         closestT = t;
                         closestEntity = candidate;
@@ -984,16 +1088,17 @@ int main(int argc, char** argv) {
         //     is selected. Same axis endpoints the hit-test above computes -- kept as a
         //     separate pass rather than merged into it since drawing must happen every
         //     frame regardless of whether a click happened this frame. ---
-        if (world.IsAlive(selectedEntity)) {
-            if (const TransformComponent* transform = world.GetTransform(selectedEntity)) {
+        if (world.IsAlive(selectedEntity) && world.HasTransform(selectedEntity)) {
+            {
+                const glm::vec3 worldPosition = worldPositionOf(selectedEntity);
                 const glm::vec3 cameraEye = glm::vec3(glm::inverse(camera.GetViewMatrix())[3]);
                 const float distanceToCamera =
-                    std::max(glm::length(transform->position - cameraEye), 0.001f);
+                    std::max(glm::length(worldPosition - cameraEye), 0.001f);
                 const float gizmoWorldLength = std::max(distanceToCamera * 0.15f, 0.3f);
 
                 bool originBehindCamera = false;
                 const glm::vec2 originScreen = WorldToScreen(
-                    transform->position, viewportWidth, viewportHeight, viewProj, originBehindCamera);
+                    worldPosition, viewportWidth, viewportHeight, viewProj, originBehindCamera);
                 if (!originBehindCamera) {
                     ImDrawList* drawList = ImGui::GetForegroundDrawList();
                     struct AxisDrawEntry {
@@ -1009,7 +1114,7 @@ int main(int argc, char** argv) {
                     for (const AxisDrawEntry& entry : axesToDraw) {
                         bool tipBehindCamera = false;
                         const glm::vec2 tipScreen = WorldToScreen(
-                            transform->position + entry.direction * gizmoWorldLength,
+                            worldPosition + entry.direction * gizmoWorldLength,
                             viewportWidth, viewportHeight, viewProj, tipBehindCamera);
                         if (tipBehindCamera) {
                             continue;
@@ -1093,7 +1198,11 @@ int main(int argc, char** argv) {
             vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
             vkCmdBindIndexBuffer(cmd, gpuData->indexBuffer.GetHandle(), 0, VK_INDEX_TYPE_UINT32);
 
-            const glm::mat4 mvp = currentViewProj * transform->GetMatrix();
+            // World::GetWorldMatrix(), not transform->GetMatrix() -- composes the parent
+            // chain (post-Editor-E8 hierarchy); identical to transform->GetMatrix() for
+            // any root entity, so no behavior change for the overwhelming majority of
+            // entities that still have no parent.
+            const glm::mat4 mvp = currentViewProj * world.GetWorldMatrix(meshEntities[i]);
             pipeline.PushModelViewProjection(cmd, mvp);
             vkCmdDrawIndexed(cmd, gpuData->indexCount, 1, 0, 0, 0);
         }

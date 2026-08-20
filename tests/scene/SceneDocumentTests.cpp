@@ -324,3 +324,99 @@ TEST_CASE("WriteSceneDocument rejects an unwritable path") {
     const std::vector<EntityDesc> entities(1);
     CHECK_FALSE(WriteSceneDocument("/this/directory/does/not/exist/scene.json", entities));
 }
+
+// Hierarchy (post-Editor-E8, docs/07-unity-parity-analysis.md).
+
+TEST_CASE("ParseSceneDocument reads a \"parent\" index, defaulting to -1 (no parent)") {
+    ScopedTempFile file("scene_document_parented.tmp.json", R"({
+        "entities": [
+            {"transform": {"position": [0.0, 0.0, 0.0]}},
+            {"transform": {"position": [1.0, 0.0, 0.0]}, "parent": 0}
+        ]
+    })");
+
+    std::vector<EntityDesc> entities;
+    REQUIRE(ParseSceneDocument(file.m_path, entities));
+    REQUIRE(entities.size() == 2);
+    CHECK(entities[0].parentIndex == -1);
+    CHECK(entities[1].parentIndex == 0);
+}
+
+TEST_CASE("WriteSceneDocument round-trips a \"parent\" index, omitting it when -1") {
+    EntityDesc root;
+    EntityDesc child;
+    child.parentIndex = 0;
+
+    ScopedTempFile file("scene_document_parent_roundtrip.tmp.json", "");
+    REQUIRE(WriteSceneDocument(file.m_path, {root, child}));
+
+    std::vector<EntityDesc> reloaded;
+    REQUIRE(ParseSceneDocument(file.m_path, reloaded));
+    REQUIRE(reloaded.size() == 2);
+    CHECK(reloaded[0].parentIndex == -1);
+    CHECK(reloaded[1].parentIndex == 0);
+
+    std::ifstream in(file.m_path);
+    std::string contents((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    // Only the child's "parent" should appear -- the root's -1 is never written at all.
+    CHECK(contents.find("\"parent\"") != std::string::npos);
+    CHECK(contents.find("\"parent\": 0") != std::string::npos);
+}
+
+TEST_CASE("SpawnEntities wires up TransformComponent::parent from parentIndex, forward "
+          "references included") {
+    World world;
+    std::vector<EntityDesc> descs(2);
+    descs[0].parentIndex = 1; // forward reference -- entity 1 doesn't exist yet at this point
+    descs[1].parentIndex = -1;
+
+    const std::vector<Entity> spawned = SpawnEntities(world, descs, glm::vec3(0.0f));
+    REQUIRE(spawned.size() == 2);
+    CHECK(world.GetTransform(spawned[0])->parent == spawned[1]);
+    CHECK(world.GetTransform(spawned[1])->parent == engine::ecs::kInvalidEntity);
+}
+
+TEST_CASE("SpawnEntities treats an out-of-range or self-referencing parentIndex as \"no "
+          "parent\" instead of corrupting the entity") {
+    World world;
+    std::vector<EntityDesc> descs(2);
+    descs[0].parentIndex = 99; // out of range
+    descs[1].parentIndex = 1;  // self-reference
+
+    const std::vector<Entity> spawned = SpawnEntities(world, descs, glm::vec3(0.0f));
+    REQUIRE(spawned.size() == 2);
+    CHECK(world.GetTransform(spawned[0])->parent == engine::ecs::kInvalidEntity);
+    CHECK(world.GetTransform(spawned[1])->parent == engine::ecs::kInvalidEntity);
+}
+
+TEST_CASE("SpawnEntities only offsets a root entity's position, never a child's "
+          "already-relative-to-parent one") {
+    World world;
+    std::vector<EntityDesc> descs(2);
+    descs[0].position = glm::vec3(1.0f, 0.0f, 0.0f); // root
+    descs[1].position = glm::vec3(2.0f, 0.0f, 0.0f); // child of descs[0]
+    descs[1].parentIndex = 0;
+
+    const std::vector<Entity> spawned =
+        SpawnEntities(world, descs, glm::vec3(10.0f, 0.0f, 0.0f));
+    CHECK(world.GetTransform(spawned[0])->position == glm::vec3(11.0f, 0.0f, 0.0f));
+    // Not 12 -- positionOffset must not double-apply to the child's local position.
+    CHECK(world.GetTransform(spawned[1])->position == glm::vec3(2.0f, 0.0f, 0.0f));
+}
+
+TEST_CASE("ExtractEntityDescs recovers parentIndex from live TransformComponent::parent "
+          "state") {
+    ScopedTempFile sourceFile("scene_parent_extract_source.tmp.json", R"({
+        "entities": [
+            {"transform": {"position": [0.0, 0.0, 0.0]}},
+            {"transform": {"position": [1.0, 0.0, 0.0]}, "parent": 0}
+        ]
+    })");
+    World world;
+    REQUIRE(LoadScene(sourceFile.m_path, world));
+
+    const std::vector<EntityDesc> extracted = ExtractEntityDescs(world);
+    REQUIRE(extracted.size() == 2);
+    CHECK(extracted[0].parentIndex == -1);
+    CHECK(extracted[1].parentIndex == 0);
+}

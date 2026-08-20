@@ -614,7 +614,11 @@ int main(int argc, char** argv) {
             vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
             vkCmdBindIndexBuffer(cmd, gpuData->indexBuffer.GetHandle(), 0, VK_INDEX_TYPE_UINT32);
 
-            const glm::mat4 mvp = currentViewProj * transform->GetMatrix();
+            // World::GetWorldMatrix(), not transform->GetMatrix() -- composes the parent
+            // chain (post-Editor-E8 hierarchy, docs/07-unity-parity-analysis.md); for a
+            // root entity (the common case, still true of every mesh in the demo scenes
+            // except the one hierarchy example) this is exactly transform->GetMatrix().
+            const glm::mat4 mvp = currentViewProj * world.GetWorldMatrix(meshEntities[i]);
             pipeline.PushModelViewProjection(cmd, mvp);
             vkCmdDrawIndexed(cmd, gpuData->indexCount, 1, 0, 0, 0);
         }

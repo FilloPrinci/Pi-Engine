@@ -122,6 +122,33 @@ the query ran -- fixed by latching the held state to `true` for that frame whene
 state reads afterward, so a real press-then-release pair always reaches `InputSystem`'s
 edge detection even for a click faster than one frame.
 
+**Also post-E8**: Hierarchy / parent-child transforms (`docs/07-unity-parity-analysis.md`'s
+former #2 priority item). `engine::ecs::TransformComponent` gained a `parent` field
+(`kInvalidEntity` = root); `engine::ecs::World::GetWorldMatrix()` composes an entity's real
+world-space matrix by walking that chain, and both the Scene View and Play Mode now render
+through it instead of a raw local `transform->GetMatrix()`, so a parented entity actually
+renders (and picks, and gizmo-drags) at its true world position, not its raw local offset.
+The Scene panel shows the result as an indented tree instead of a flat list (root entities
+at the top level, children nested underneath, always fully expanded -- see
+`renderEntityNode`'s own comment on why per-node collapse/expand isn't worth the added risk
+at the scene sizes this project actually has, especially after a real indent-leak bug
+showed up testing an `ImGui::TreeNodeEx()`-based version). The Inspector gained a "Parent"
+combo box for reparenting, refusing any choice that would create a cycle
+(`World::IsDescendantOf()` rejects both the entity itself and any of its own descendants).
+Scene JSON gained a `"parent"` field (an index into the same document's `entities` array,
+since entities have no persistent id of their own) -- `SpawnEntities()` resolves it in a
+second pass once every entity in the batch already exists, so both forward and backward
+references work; `positionOffset` (used by `Prefab::Instantiate()`) only ever applies to a
+root entity, never a child, since a child's position is already relative to its parent, not
+world space. `editor/assets/demo.scene.json` gained a small child cube parented to the
+RotateScript'd middle cube as a live example -- verified genuinely composing (not just
+existing as a data field) by watching it visibly orbit its spinning parent in Play Mode
+across two Pi4 screenshots. One deliberate, documented gap: physics bodies still don't
+compose through a parent -- a Rigidbody+Collider entity with a parent is created at its
+local transform values as if they were world space, since Jolt has no native "parent"
+concept for rigid bodies and a correct fix needs a joint/constraint or a per-frame
+kinematic copy, out of scope for this pass.
+
 Mesh resolution is a placeholder GUID → GPU-buffers cache (same pattern as
 `samples/m7_scene_and_prefab`) that only knows about `m1_cube.mesh` — a real GUID →
 cooked-path manifest is Asset Browser territory (Editor step E6), not built yet.

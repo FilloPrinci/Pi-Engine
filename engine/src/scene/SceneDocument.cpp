@@ -5,8 +5,10 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <unordered_map>
 
 namespace engine::scene {
 
@@ -85,6 +87,10 @@ EntityDesc ParseEntity(const nlohmann::json& json) {
         }
     }
 
+    if (json.contains("parent") && json["parent"].is_number_integer()) {
+        desc.parentIndex = json["parent"].get<int>();
+    }
+
     return desc;
 }
 
@@ -132,6 +138,10 @@ nlohmann::json WriteEntity(const EntityDesc& desc) {
 
     if (!desc.scriptNames.empty()) {
         entityJson["scripts"] = desc.scriptNames;
+    }
+
+    if (desc.parentIndex >= 0) {
+        entityJson["parent"] = desc.parentIndex;
     }
 
     return entityJson;
@@ -201,12 +211,33 @@ std::vector<EntityDesc> ExtractEntityDescs(const ecs::World& world) {
     const auto& transformData = world.Transforms().Data();
     entities.reserve(transformEntities.size());
 
+    // Entity -> its own position in this output list, so a parent Entity can be translated
+    // back into the EntityDesc::parentIndex SpawnEntities() will resolve it from later (see
+    // this function's own header comment for why no separate id needs to survive the round
+    // trip). Keyed by Entity::index alone, not the full Entity (index+generation) -- every
+    // key here comes from `transformEntities`, i.e. entities alive *this instant*, so two
+    // different generations of the same index can never both be present to collide; the
+    // generation is exactly the part a plain index-based map would get wrong if it could.
+    std::unordered_map<std::uint32_t, int> indexOf;
+    indexOf.reserve(transformEntities.size());
+    for (std::size_t i = 0; i < transformEntities.size(); ++i) {
+        indexOf.emplace(transformEntities[i].index, static_cast<int>(i));
+    }
+
     for (std::size_t i = 0; i < transformEntities.size(); ++i) {
         const ecs::Entity entity = transformEntities[i];
         EntityDesc desc;
         desc.position = transformData[i].position;
         desc.rotation = transformData[i].rotation;
         desc.scale = transformData[i].scale;
+
+        if (transformData[i].parent != ecs::kInvalidEntity && world.IsAlive(transformData[i].parent)) {
+            const auto parentIt = indexOf.find(transformData[i].parent.index);
+            // Always found in practice once IsAlive() above is true (every alive entity
+            // with a Transform is in indexOf) -- the fallback just avoids ever writing a
+            // bogus index if that assumption is somehow violated.
+            desc.parentIndex = parentIt != indexOf.end() ? parentIt->second : -1;
+        }
 
         if (const ecs::MeshComponent* mesh = world.GetMesh(entity)) {
             desc.hasMesh = true;
@@ -250,7 +281,9 @@ std::vector<ecs::Entity> SpawnEntities(ecs::World& world, const std::vector<Enti
         const ecs::Entity entity = world.CreateEntity();
 
         ecs::TransformComponent transform;
-        transform.position = desc.position + positionOffset;
+        // positionOffset only ever applies to a root entity -- a non-root's position is
+        // relative to its parent, not world space, see this function's own header comment.
+        transform.position = desc.position + (desc.parentIndex < 0 ? positionOffset : glm::vec3(0.0f));
         transform.rotation = desc.rotation;
         transform.scale = desc.scale;
         world.AddTransform(entity, transform);
@@ -296,6 +329,27 @@ std::vector<ecs::Entity> SpawnEntities(ecs::World& world, const std::vector<Enti
         }
 
         spawned.push_back(entity);
+    }
+
+    // Second pass: wire up TransformComponent::parent now that every entity in this batch
+    // exists (a forward reference, e.g. entity 0 parented to entity 3, needs entity 3 to
+    // already have been created -- see this function's own header comment).
+    for (std::size_t i = 0; i < entities.size(); ++i) {
+        const int parentIndex = entities[i].parentIndex;
+        if (parentIndex < 0) {
+            continue;
+        }
+        if (static_cast<std::size_t>(parentIndex) >= spawned.size() ||
+            static_cast<std::size_t>(parentIndex) == i) {
+            std::fprintf(stderr,
+                         "SpawnEntities: entity %zu has an invalid parent index %d (valid "
+                         "range: 0..%zu, excluding itself) -- treating it as a root entity\n",
+                         i, parentIndex, spawned.size() - 1);
+            continue;
+        }
+        if (ecs::TransformComponent* transform = world.GetTransform(spawned[i])) {
+            transform->parent = spawned[static_cast<std::size_t>(parentIndex)];
+        }
     }
 
     return spawned;

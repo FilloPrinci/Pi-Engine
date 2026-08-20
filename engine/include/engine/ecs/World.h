@@ -46,6 +46,24 @@ public:
     const ColliderComponent* GetCollider(Entity entity) const;
     bool HasCollider(Entity entity) const;
 
+    // Hierarchy (post-Editor-E8, docs/07-unity-parity-analysis.md): composes `entity`'s
+    // world-space matrix by walking TransformComponent::parent up to a root, multiplying
+    // each ancestor's own *local* matrix on the left as it goes (standard scene-graph
+    // composition -- world = parentWorld * local). An entity with no Transform returns
+    // identity; one with no parent (or a parent that's since been destroyed/invalid)
+    // returns exactly its own local matrix, same as before hierarchy existed. Capped at a
+    // fixed hop count so a malformed/cyclic parent chain (e.g. a hand-edited scene file)
+    // can't hang this in an infinite loop -- walks off the end of the cap instead of
+    // detecting the cycle explicitly, which is enough to stay safe without needing a
+    // separate visited-set allocation for scenes this small.
+    glm::mat4 GetWorldMatrix(Entity entity) const;
+
+    // True if `ancestor` appears anywhere in `candidate`'s parent chain -- the Inspector's
+    // parent picker (post-Editor-E8) uses this to refuse a reparent that would create a
+    // cycle (an entity can never become its own descendant's child). Same depth cap as
+    // GetWorldMatrix() for the same reason.
+    bool IsDescendantOf(Entity candidate, Entity ancestor) const;
+
     ComponentStorage<TransformComponent>& Transforms() { return m_transforms; }
     const ComponentStorage<TransformComponent>& Transforms() const { return m_transforms; }
     ComponentStorage<MeshComponent>& Meshes() { return m_meshes; }

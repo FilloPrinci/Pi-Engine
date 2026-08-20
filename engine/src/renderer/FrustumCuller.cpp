@@ -43,6 +43,15 @@ void FrustumCuller::Cull(ecs::World& world, jobs::JobSystem& jobSystem,
                 continue;
             }
 
+            // TransformComponent::GetMatrix() is a *local* matrix (post-Editor-E8
+            // hierarchy, docs/07-unity-parity-analysis.md) -- correct here only because
+            // every M0-M7 sample that culls is still flat (no entity sets
+            // TransformComponent::parent). A future parented+culled scene would need
+            // World::GetWorldMatrix(entities[i]) instead, walking the parent chain --
+            // not done here yet since nothing exercises that combination, and composing
+            // it per-entity inside this ParallelFor would need to be re-checked for
+            // thread-safety against a mid-parallel-mutation World (reads only today, so
+            // almost certainly fine, but deliberately not assumed without a reason to).
             const glm::vec3 worldCenter =
                 glm::vec3(transform->GetMatrix() * glm::vec4(meshes[i].boundsCenter, 1.0f));
             const float maxScale =

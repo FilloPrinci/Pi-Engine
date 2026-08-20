@@ -21,7 +21,7 @@
 |---|---|---|---|
 | Scene View navigation | Partial | Mouse-look free camera, focus-on-selection, gizmos | Keyboard-only orbit camera (A/D/W/S/Up/Down) — unchanged; a translate gizmo now exists (see below) but there's still no mouse-look and no focus-on-selection shortcut |
 | Object selection/manipulation | Partial | Click-select in viewport, move/rotate/scale gizmos, multi-select | Click-select directly in the viewport now works (ray vs. each entity's bounding sphere, closest hit wins) alongside the existing Scene-panel list click, and a translate gizmo (drag a colored axis to move) appears on the selection — real progress, but still translate-only (no rotate/scale gizmo), world-space axes only (no local/global toggle), single selection only, and picking is a sphere approximation so a very flat/elongated mesh (e.g. a thin ground slab) has a picking volume noticeably larger than its visible silhouette |
-| Hierarchy (parent-child) | Missing | Nested transforms, drag-to-reparent | No parent field on `TransformComponent` at all — every entity is a root |
+| Hierarchy (parent-child) | Partial | Nested transforms, drag-to-reparent | `TransformComponent` has a `parent` field, composed into a real world matrix by `World::GetWorldMatrix()` (Editor Scene View and Play Mode both render through it); the Scene panel shows entities as an indented tree instead of a flat list; the Inspector has a "Parent" combo box for reparenting (cycle-safe via `World::IsDescendantOf()`) — what's missing next to Unity is drag-and-drop reparenting *in* the Hierarchy panel itself (combo box only for now) and per-node collapse/expand (always fully expanded, an accepted v1 simplification) |
 | Inspector — component add/remove | Missing | "Add Component" dropdown, remove via context menu | Inspector only edits components an entity was spawned with; nothing can be added or removed at runtime |
 | Undo/Redo | Missing | Ctrl+Z/Y across the whole Editor | Does not exist in any form |
 | Scene saving | Have | Ctrl+S, dirty-flag warning on close | Explicit Save button (E4), no dirty-flag/unsaved-changes prompt |
@@ -62,10 +62,20 @@ not by how large the gap looks above:
    local- vs. world-space toggle, multi-select) is real Unity functionality this still
    doesn't have, but translate-only was the actual workflow gap, so it's dropped off this
    top-5 list rather than kept at the top.
-2. **Hierarchy / parent-child transforms.** Almost every real scene needs grouping (a
-   vehicle's wheels, a character's held item). This is an ECS-level change first
-   (`TransformComponent` needs a parent field and the renderer/physics needs to compose
-   world transforms), not just an Editor UI change — bigger than it looks from the table.
+2. ~~Hierarchy / parent-child transforms.~~ **Done** (`TransformComponent::parent`,
+   `World::GetWorldMatrix()`/`IsDescendantOf()`, an indented Scene panel tree, an
+   Inspector "Parent" combo) — grouping (a vehicle's wheels, a character's held item) now
+   works: a child's position/rotation/scale are relative to its parent, composed into a
+   real world matrix everywhere an entity gets rendered. Verified on Pi4 by watching a
+   child cube visibly orbit its RotateScript'd parent in Play Mode across two screenshots
+   — proof the composition is genuinely live, not just a data field that exists. What's
+   still missing next to Unity: drag-and-drop reparenting *in* the Hierarchy panel
+   (combo box only), per-node collapse/expand (always fully expanded), and physics bodies
+   still don't compose through a parent (a Rigidbody+Collider entity with a parent is
+   created at its local transform values as if they were world space -- a known,
+   documented gap, out of scope for this pass since Jolt has no native "parent" concept
+   for rigid bodies and a correct fix needs a joint/constraint or a per-frame kinematic
+   copy, either one a separate, larger piece of work).
 3. ~~Data-driven script attachment.~~ **Done** (scene JSON's `"scripts"` field, attached
    and run by Play Mode) — Play (E8) can now run real gameplay for any script type
    `editor_play` was built with, not just preview physics/rendering. What's left here

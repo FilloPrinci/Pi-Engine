@@ -72,6 +72,44 @@ ColliderComponent* World::GetCollider(Entity entity) { return m_colliders.Get(en
 const ColliderComponent* World::GetCollider(Entity entity) const { return m_colliders.Get(entity); }
 bool World::HasCollider(Entity entity) const { return m_colliders.Has(entity); }
 
+glm::mat4 World::GetWorldMatrix(Entity entity) const {
+    constexpr int kMaxParentChainDepth = 64;
+
+    const TransformComponent* transform = GetTransform(entity);
+    if (transform == nullptr) {
+        return glm::mat4(1.0f);
+    }
+
+    glm::mat4 matrix = transform->GetMatrix();
+    Entity current = transform->parent;
+    for (int depth = 0; depth < kMaxParentChainDepth && IsAlive(current); ++depth) {
+        const TransformComponent* parentTransform = GetTransform(current);
+        if (parentTransform == nullptr) {
+            break;
+        }
+        matrix = parentTransform->GetMatrix() * matrix;
+        current = parentTransform->parent;
+    }
+    return matrix;
+}
+
+bool World::IsDescendantOf(Entity candidate, Entity ancestor) const {
+    constexpr int kMaxParentChainDepth = 64;
+
+    Entity current = candidate;
+    for (int depth = 0; depth < kMaxParentChainDepth && IsAlive(current); ++depth) {
+        const TransformComponent* transform = GetTransform(current);
+        if (transform == nullptr) {
+            return false;
+        }
+        if (transform->parent == ancestor) {
+            return true;
+        }
+        current = transform->parent;
+    }
+    return false;
+}
+
 template <>
 TransformComponent* World::GetComponent<TransformComponent>(Entity entity) {
     return GetTransform(entity);

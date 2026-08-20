@@ -6,11 +6,22 @@
   arrays -- one `ComponentStorage<T>` per known component type, dense/contiguous, O(1)
   lookup, swap-and-pop removal (docs/01 section 2.3/4).
 - `World.h` + `.cpp` -- done (M2): entity lifetime (create/destroy, generation
-  invalidation, index recycling) + Transform/Mesh component storage.
+  invalidation, index recycling) + Transform/Mesh component storage. `GetWorldMatrix()`/
+  `IsDescendantOf()` added post-Editor-E8 (docs/07-unity-parity-analysis.md's Hierarchy
+  item) -- see `components/TransformComponent.h`'s own comment for the local-vs-world
+  split these exist to bridge.
 - `components/TransformComponent.h`, `components/MeshComponent.h` -- done (M2).
   `MeshComponent` gains `meshGuid` in M7 (docs/01 section 12.3, `engine/asset/AssetGuid.h`)
   -- which cooked mesh a `scene/`-spawned entity renders, defaulted to
   `asset::kInvalidAssetGuid` so every M0-M6 sample (which never sets it) is unaffected.
+  `TransformComponent` gains `parent` post-Editor-E8 (an `Entity`, `kInvalidEntity` = root)
+  -- `GetMatrix()` stays purely *local* on purpose (composing a *world* matrix needs to
+  walk the parent chain, which needs a `World` to resolve `Entity -> TransformComponent`
+  lookups, so that lives on `World::GetWorldMatrix()` instead). Every renderer that draws
+  an entity (Editor Scene View, Play Mode) has to call `GetWorldMatrix()`, not
+  `transform->GetMatrix()`, or a parented entity renders at its raw local offset instead
+  of composed through its parent -- `FrustumCuller.cpp` still uses the local-only path,
+  documented there as a known gap since nothing that culls creates a hierarchy yet.
 - `components/RigidbodyComponent.h`, `components/ColliderComponent.h` -- done (M4).
   `RigidbodyComponent` stores a packed `uint32` body id, not a `JPH::BodyID`, so this file
   (included transitively by every `World.h` consumer) never pulls Jolt's headers in --

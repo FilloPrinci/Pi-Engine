@@ -52,6 +52,12 @@ bool WriteSceneDocument(const char* path, const std::vector<EntityDesc>& entitie
 //   scripts in the first place (E2-E7's read-only view passes no AttachScriptFn either),
 //   so this again only matters for a scene document that already had a "scripts" block
 //   before the Editor loaded and re-saved it.
+// Unlike those two, TransformComponent::parent *is* live ECS state (added alongside
+// hierarchy support, post-Editor-E8) -- fully recoverable here, translated back from an
+// ecs::Entity to an EntityDesc::parentIndex via this same function's own output order (the
+// Nth entity in `world.Transforms().Entities()` becomes the Nth EntityDesc, so a parent's
+// position in that same sequence is exactly the index SpawnEntities() will resolve it back
+// from -- no separate id map needs to survive the round trip).
 std::vector<EntityDesc> ExtractEntityDescs(const ecs::World& world);
 
 // Called once per EntityDesc that has both a "collider" and a "rigidbody" block, after its
@@ -80,7 +86,16 @@ using AttachScriptFn = std::function<void(ecs::World&, ecs::Entity, const std::s
 
 // Creates one real ECS entity per EntityDesc in `world`, offset by `positionOffset`
 // (Scene::Load uses (0,0,0); Prefab::Instantiate uses wherever the caller wants this copy
-// placed). Returns the created entities in the same order as `entities`.
+// placed). Returns the created entities in the same order as `entities`. Two passes
+// internally: every entity is created first (so every EntityDesc::parentIndex, forward or
+// backward, resolves to something that already exists), *then* TransformComponent::parent
+// is wired up from parentIndex in a second pass -- an out-of-range or self-referencing
+// parentIndex is treated as "no parent" (with a stderr warning) rather than corrupting the
+// entity or crashing. `positionOffset` is only ever added to a *root* entity's position
+// (parentIndex == -1) -- a non-root entity's position is relative to its parent, not
+// world space, so it must reach its final world position purely through the parent chain
+// (World::GetWorldMatrix()) instead of also being nudged by positionOffset directly,
+// which would double-offset it.
 std::vector<ecs::Entity> SpawnEntities(ecs::World& world, const std::vector<EntityDesc>& entities,
                                        const glm::vec3& positionOffset,
                                        const CreatePhysicsBodyFn& createPhysicsBody = {},

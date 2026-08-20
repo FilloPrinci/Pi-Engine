@@ -53,6 +53,20 @@ struct EntityDesc {
     // engine (docs/01 section 6.1), so "data-driven" here means "which of the scripts
     // already linked into this executable to use", not "load arbitrary new code".
     std::vector<std::string> scriptNames;
+
+    // Hierarchy (post-Editor-E8, docs/07-unity-parity-analysis.md): index of this
+    // entity's parent *within the same document's `entities` array* (position/rotation/
+    // scale above are then relative to that parent, not world space), or -1 for "no
+    // parent, this is a root entity". An array index rather than a GUID/name reference on
+    // purpose -- entities have no persistent identity of their own within a scene
+    // document (docs/01 section 12.2 never gave them one), so "the Nth entity in this
+    // file" is the only stable way to refer to another entity from inside the same file,
+    // the same reasoning `samples/m7_scene_and_prefab`'s mesh GUID lookup uses a real
+    // identifier while an in-document cross-reference just uses position. Resolved to a
+    // real ecs::Entity by SpawnEntities() only after every entity in the document has
+    // already been created (see its own comment) -- a forward reference (parenting to an
+    // entity later in the array) works exactly like a backward one.
+    int parentIndex = -1;
 };
 
 } // namespace engine::scene

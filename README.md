@@ -57,7 +57,10 @@ Scene View and Play Mode render every entity through its true world-space transf
 (composed from its whole parent chain), not just its raw local one; and every Inspector
 edit, reparent, and gizmo drag is now undoable (Ctrl+Z/Ctrl+Y, or the Undo/Redo buttons),
 a whole click-drag-release counting as one undo step rather than one per intermediate
-value.
+value. The Editor also now uses a real docked panel layout (Hierarchy left, Inspector
+right, Assets/Console/Project Hub tabbed along the bottom, the 3D Scene view filling the
+middle — the classic Unity arrangement, built via Dear ImGui's docking support), rather
+than a set of loosely floating windows.
 
 ## Prerequisites
 

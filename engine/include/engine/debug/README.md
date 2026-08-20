@@ -24,6 +24,14 @@
 (`editor/main.cpp`) -- gates *starting* a new pick/gizmo-drag so clicking an ImGui panel
 never also acts on the 3D view behind it, but doesn't gate an already-started drag's
 continuation/release (stranding it "stuck" if the mouse strays over a panel mid-drag would
-be worse). `WantCaptureKeyboard` still isn't consulted anywhere -- not an issue in practice
-since the Scene View's camera is keyboard-only (A/D/W/S/Up/Down, see `editor/README.md`)
-and no ImGui text field exists yet for stray keystrokes to leak into.
+be worse). `WantCaptureKeyboard` is consulted too, since the Undo/Redo follow-up
+(`editor/UndoStack.h`) added Ctrl+Z/Ctrl+Y shortcuts that need to defer to ImGui's own
+in-widget text-edit shortcuts (e.g. undoing a keystroke inside a `DragFloat`'s text-entry
+box) rather than also firing the Editor's own undo stack at the same time.
+
+`ImGuiConfigFlags_DockingEnable` is *not* set here -- docking (post-Editor-E8, the
+Editor's panel layout) is an Editor-only opt-in, enabled directly in `editor/main.cpp`
+after `ImGuiOverlay::Init()` returns, since this class stays generic for non-Editor
+consumers (`samples/e1_imgui_overlay`) that have no reason to opt into it. Needs vcpkg's
+imgui `docking-experimental` feature (`vcpkg.json`) -- the plain `imgui` feature set
+doesn't build `DockBuilder`/`DockSpace` support at all.

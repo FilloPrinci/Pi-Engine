@@ -20,6 +20,12 @@
 #include "engine/scene/Scene.h"
 
 #include <imgui.h>
+// imgui_internal.h -- DockBuilder*() (docking layout post-Editor-E8) lives here, not in
+// imgui.h's public API. "Internal" in name only: this is Dear ImGui's own documented way
+// to lay out a default dock configuration in code rather than requiring the user to
+// manually drag every panel into place on first run -- the standard pattern used by every
+// ImGui-based tool that ships a default docked layout (ImGui's own demo included).
+#include <imgui_internal.h>
 #include <volk.h>
 
 #include <algorithm>
@@ -100,7 +106,7 @@ std::vector<std::string> ListDirectory(const std::filesystem::path& dir, bool ex
     return names;
 }
 
-// Shared by the Scene panel's hierarchy tree and the Inspector's parent picker (post-
+// Shared by the Hierarchy panel's tree and the Inspector's parent picker (post-
 // Editor-E8) -- both need to show the same human-readable name for an entity, and neither
 // has anything richer than the raw handle to name it with yet (no per-entity name field
 // exists in EntityDesc/TransformComponent).
@@ -501,6 +507,11 @@ int main(int argc, char** argv) {
                        swapchain.GetImageCount())) {
         return EXIT_FAILURE;
     }
+    // Docking (post-Editor-E8) -- an Editor-only opt-in, not enabled inside ImGuiOverlay
+    // itself (engine::debug/, shared by non-Editor consumers like samples/e1_imgui_overlay,
+    // stays generic). Needs vcpkg's imgui "docking-experimental" feature (vcpkg.json) --
+    // the pinned imgui version doesn't build DockBuilder/DockSpace support without it.
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
     std::vector<VkFramebuffer> framebuffers(swapchain.GetImageCount());
     auto createFramebuffers = [&]() -> bool {
@@ -698,8 +709,78 @@ int main(int argc, char** argv) {
                               static_cast<float>(swapchain.GetExtent().height);
         const glm::mat4 viewProj = camera.GetProjectionMatrix(aspect) * camera.GetViewMatrix();
 
-        ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_FirstUseEver);
-        ImGui::Begin("Pi-Engine Editor");
+        // --- Dockspace + default layout (post-Editor-E8) -- a Unity-style arrangement
+        //     (Hierarchy left, Inspector right, Assets/Console/Project Hub tabbed along
+        //     the bottom, the 3D Scene view filling whatever's left in the middle) built
+        //     once via ImGui's DockBuilder API instead of leaving every panel wherever it
+        //     last happened to float. The host window covers the whole viewport with
+        //     ImGuiWindowFlags_NoBackground + the DockSpace's own
+        //     ImGuiDockNodeFlags_PassthruCentralNode, so the empty central region neither
+        //     paints over the 3D render already happening behind it nor blocks mouse
+        //     input there -- the existing viewport picking/gizmo code (WantCaptureMouse-
+        //     gated) needs no changes at all, since a click that lands in that empty
+        //     central region was already correctly seen as "not over an ImGui window".
+        //     DockBuilderGetNode()/IsSplitNode() below means the default layout is only
+        //     ever *built* the first time this dockspace ID has no usable layout yet (a
+        //     genuinely fresh launch, or imgui.ini deleted/never existed) -- once built,
+        //     ImGui's own imgui.ini persistence takes over exactly like every other
+        //     panel's position already does, so a user who manually drags a panel
+        //     somewhere else keeps that arrangement across restarts instead of it
+        //     snapping back to this default every launch. ---
+        const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(mainViewport->WorkPos);
+        ImGui::SetNextWindowSize(mainViewport->WorkSize);
+        ImGui::SetNextWindowViewport(mainViewport->ID);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+        constexpr ImGuiWindowFlags kDockHostFlags =
+            ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
+            ImGuiWindowFlags_NoBackground;
+        ImGui::Begin("EditorDockSpaceHost", nullptr, kDockHostFlags);
+        ImGui::PopStyleVar(3);
+
+        const ImGuiID dockspaceId = ImGui::GetID("EditorDockSpace");
+        ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
+        if (ImGui::DockBuilderGetNode(dockspaceId) == nullptr ||
+            ImGui::DockBuilderGetNode(dockspaceId)->IsSplitNode() == false) {
+            ImGui::DockBuilderRemoveNode(dockspaceId);
+            // ImGuiDockNodeFlags_DockSpace itself lives in imgui_internal.h's "Private"
+            // dock-node-flags enum, not the public ImGuiDockNodeFlags_ one
+            // ImGuiDockNodeFlags_PassthruCentralNode belongs to -- an explicit cast avoids
+            // -Wdeprecated-enum-enum-conversion for OR-ing the two together, which is
+            // exactly what DockBuilderAddNode() itself expects for a true dockspace node.
+            ImGui::DockBuilderAddNode(
+                dockspaceId, static_cast<ImGuiDockNodeFlags>(ImGuiDockNodeFlags_DockSpace) |
+                                 ImGuiDockNodeFlags_PassthruCentralNode);
+            ImGui::DockBuilderSetNodeSize(dockspaceId, mainViewport->WorkSize);
+
+            ImGuiID centerId = dockspaceId;
+            const ImGuiID leftId =
+                ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Left, 0.18f, nullptr, &centerId);
+            const ImGuiID rightId =
+                ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Right, 0.22f, nullptr, &centerId);
+            const ImGuiID bottomId =
+                ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Down, 0.28f, nullptr, &centerId);
+            ImGuiID leftBottomId = leftId;
+            const ImGuiID leftTopId =
+                ImGui::DockBuilderSplitNode(leftId, ImGuiDir_Up, 0.30f, nullptr, &leftBottomId);
+
+            ImGui::DockBuilderDockWindow("Pi-Engine Editor", leftTopId);
+            ImGui::DockBuilderDockWindow("Hierarchy", leftBottomId);
+            ImGui::DockBuilderDockWindow("Inspector", rightId);
+            ImGui::DockBuilderDockWindow("Assets", bottomId);
+            ImGui::DockBuilderDockWindow("Console", bottomId);
+            ImGui::DockBuilderDockWindow("Project Hub", bottomId);
+            ImGui::DockBuilderFinish(dockspaceId);
+        }
+        ImGui::End();
+
+        ImGui::Begin("Pi-Engine Editor"); // Docked (see the layout block above) --
+                                          // no SetNextWindowPos/Size, the dock node owns
+                                          // this window's position/size now.
         ImGui::Text("Scene: %s", scenePath.c_str());
         ImGui::Text("Entities: %zu mesh", world.Meshes().Data().size());
         ImGui::Text("FPS: %.0f", lastReportedFps);
@@ -765,22 +846,19 @@ int main(int argc, char** argv) {
         }
         ImGui::End();
 
-        // --- Scene panel: every entity with a Transform (docs/06-editor-roadmap.md, E3),
-        //     shown as a hierarchy tree (post-Editor-E8, docs/07-unity-parity-analysis.md)
-        //     -- root entities (TransformComponent::parent == kInvalidEntity) at the top
-        //     level, each one's children indented underneath, matching the shape of
-        //     Unity's own Hierarchy panel (always fully expanded here, no per-node
+        // --- Hierarchy panel (named "Scene" through E3-E8, renamed to match Unity's own
+        //     naming and the reference layout post-Editor-E8): every entity with a
+        //     Transform (docs/06-editor-roadmap.md, E3), shown as a hierarchy tree
+        //     (post-Editor-E8, docs/07-unity-parity-analysis.md) -- root entities
+        //     (TransformComponent::parent == kInvalidEntity) at the top level, each one's
+        //     children indented underneath (always fully expanded here, no per-node
         //     collapse -- see renderEntityNode's own comment for why). Clicking a row
-        //     still just selects it, same as the flat list this replaces. O(n)
+        //     still just selects it, same as the flat list this originally was. O(n)
         //     children-of-X scan per node (so O(n^2) for the whole tree) instead of a
         //     parent->children map -- fine at the scene sizes this project actually has;
-        //     worth revisiting if a scene ever has enough entities for that to matter. Y
-        //     offset (220, was 150 through Editor step E7) leaves room below the
-        //     "Pi-Engine Editor" info window above, which grew a Play/Play in Debug row in
-        //     E8. ---
-        ImGui::SetNextWindowPos(ImVec2(10.0f, 220.0f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(260.0f, 180.0f), ImGuiCond_FirstUseEver);
-        ImGui::Begin("Scene");
+        //     worth revisiting if a scene ever has enough entities for that to matter.
+        //     Docked (see the layout block above) -- no SetNextWindowPos/Size. ---
+        ImGui::Begin("Hierarchy");
         const auto& sceneEntities = world.Transforms().Entities();
 
         // Deliberately not ImGui::TreeNodeEx()'s own indent-stack push/pop -- an earlier
@@ -821,9 +899,8 @@ int main(int argc, char** argv) {
         //     wouldn't mean anything yet (Mesh GUID, Rigidbody body id) and live-editable
         //     where it does (Transform, Collider shape data) -- DragFloat*/Checkbox below
         //     mutate the ComponentStorage entry GetTransform()/GetCollider() point right
-        //     into, no separate "apply" step, visible in the Scene View next frame. ---
-        ImGui::SetNextWindowPos(ImVec2(280.0f, 10.0f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(340.0f, 320.0f), ImGuiCond_FirstUseEver);
+        //     into, no separate "apply" step, visible in the Scene View next frame.
+        //     Docked (see the layout block above) -- no SetNextWindowPos/Size. ---
         ImGui::Begin("Inspector");
         if (world.IsAlive(selectedEntity)) {
             if (TransformComponent* transform = world.GetTransform(selectedEntity)) {
@@ -959,7 +1036,7 @@ int main(int argc, char** argv) {
                 }
             }
         } else {
-            ImGui::TextUnformatted("No entity selected -- click one in the Scene panel.");
+            ImGui::TextUnformatted("No entity selected -- click one in the Hierarchy panel.");
         }
         ImGui::End();
 
@@ -967,9 +1044,9 @@ int main(int argc, char** argv) {
         //     printed since Console::Init() (main()'s first statement), stderr lines
         //     highlighted red. Not a new logging API -- every existing
         //     std::printf/std::fprintf(stderr, ...) call site across the engine is
-        //     captured as-is (Console.h's own comment explains how). ---
-        ImGui::SetNextWindowPos(ImVec2(10.0f, 470.0f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(700.0f, 220.0f), ImGuiCond_FirstUseEver);
+        //     captured as-is (Console.h's own comment explains how). Docked (see the
+        //     layout block above) tabbed alongside Assets/Project Hub -- no
+        //     SetNextWindowPos/Size. ---
         ImGui::Begin("Console");
         if (!consoleAvailable) {
             ImGui::TextUnformatted("Console capture not available on this platform.");
@@ -996,14 +1073,15 @@ int main(int argc, char** argv) {
         }
         ImGui::End();
 
-        // --- Asset Browser panel (Editor step E6, minimal): assets/ (Cooker source
-        //     assets, docs/01 section 12.1) and assets_cooked/ (this build's Cooker
-        //     output) side by side. Selecting a source asset shows its .meta GUID, if
-        //     one exists (engine::asset::TryReadAssetMetaGuid) -- no "New Script"
-        //     template generation yet (its own larger sub-feature, deferred further). ---
-        ImGui::SetNextWindowPos(ImVec2(720.0f, 470.0f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(420.0f, 220.0f), ImGuiCond_FirstUseEver);
-        ImGui::Begin("Asset Browser");
+        // --- Assets panel (named "Asset Browser" through E6-E8, renamed to match the
+        //     reference layout post-Editor-E8, minimal): assets/ (Cooker source assets,
+        //     docs/01 section 12.1) and assets_cooked/ (this build's Cooker output) side
+        //     by side. Selecting a source asset shows its .meta GUID, if one exists
+        //     (engine::asset::TryReadAssetMetaGuid) -- no "New Script" template
+        //     generation yet (its own larger sub-feature, deferred further). Docked (see
+        //     the layout block above) tabbed alongside Console/Project Hub -- no
+        //     SetNextWindowPos/Size. ---
+        ImGui::Begin("Assets");
         if (ImGui::CollapsingHeader("Source Assets (assets/)", ImGuiTreeNodeFlags_DefaultOpen)) {
             for (const std::string& name : sourceAssetNames) {
                 if (ImGui::Selectable(name.c_str(), name == selectedSourceAsset)) {
@@ -1051,9 +1129,8 @@ int main(int argc, char** argv) {
         //     *different* scene than the one this process already has open relaunches
         //     the Editor pointed at it (one process per open project, same as Unity Hub
         //     really works) instead of trying to hot-swap the running World -- nothing
-        //     else in this engine supports live-reloading either. ---
-        ImGui::SetNextWindowPos(ImVec2(1160.0f, 470.0f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(320.0f, 220.0f), ImGuiCond_FirstUseEver);
+        //     else in this engine supports live-reloading either. Docked (see the layout
+        //     block above) tabbed alongside Assets/Console -- no SetNextWindowPos/Size. ---
         ImGui::Begin("Project Hub");
         if (recentProjects.empty()) {
             ImGui::TextDisabled("(no recent scenes yet)");

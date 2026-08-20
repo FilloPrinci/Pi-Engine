@@ -107,7 +107,7 @@ Pi-Engine/
 | stb_image | PNG decoding (`cooker texture`) | vendored (single header), `tools/cooker` only |
 | Jolt Physics | Physics | vcpkg |
 | miniaudio | Audio | vendored (single header) |
-| Dear ImGui | Debug overlay / Editor UI | vcpkg (core library only); Vulkan/SDL2 backend glue vendored in `third_party/imgui_backends/` (see that directory's README) |
+| Dear ImGui | Debug overlay / Editor UI | vcpkg (`docking-experimental` feature enabled, post-Editor-E8, for the Editor's docked panel layout); Vulkan/SDL2 backend glue vendored in `third_party/imgui_backends/` (see that directory's README) |
 | doctest | Unit testing | vcpkg |
 | nlohmann-json | Asset sidecar (`.meta`)/scene+prefab serialization | vcpkg (header-only); `tools/cooker` (sidecar) and `engine_core`'s `scene/` module (scene/prefab JSON, read at runtime) |
 | shaderc | GLSL → SPIR-V compilation | vcpkg; `tools/cooker` only (`cooker shader`, replaces each sample's own direct `glslc` invocation) |

@@ -176,6 +176,45 @@ already used for E3 Inspector testing since a real click-drag can't be scripted 
 and a Parent reparent (visibly moved the child into the Scene tree, then back out) both
 round-tripped correctly through Undo then Redo.
 
+**Also post-E8**: a real docked panel layout (user-provided reference sketch: Hierarchy
+left, Inspector right, Assets/Console/Project Hub tabbed along the bottom, the 3D Scene
+view filling the middle -- the classic Unity arrangement). Needed vcpkg's imgui
+`docking-experimental` feature (`vcpkg.json`) -- the plain `imgui` feature set doesn't
+build `DockBuilder`/`DockSpace` support at all. `ImGuiConfigFlags_DockingEnable` is set
+only in `editor/main.cpp`, not inside `engine::debug::ImGuiOverlay` itself, since that
+class is shared by non-Editor consumers (`samples/e1_imgui_overlay`) that have no reason
+to opt into docking. The default layout is built once, in code, via `imgui_internal.h`'s
+`DockBuilder*` API (the standard, if technically "internal", way every ImGui-based tool
+sets up a default docked arrangement) -- `Pi-Engine Editor` (info/actions) stacked above
+`Hierarchy` on the left, `Inspector` alone on the right, `Console`/`Assets`/`Project Hub`
+tabbed together along the bottom, and the central region deliberately left with no window
+docked into it at all. That central region uses `ImGuiDockNodeFlags_PassthruCentralNode`
+(host window: `ImGuiWindowFlags_NoBackground`) specifically so the 3D scene, still
+rendered the same way it always has been (no render-to-texture, no Vulkan changes at
+all -- the panels are simply opaque windows drawn on top of the existing full-window 3D
+render, exactly as the old floating-window layout already did), shows through
+unobstructed, and so the *existing* `WantCaptureMouse`-gated viewport picking/gizmo code
+needs zero changes: a click that lands in that empty central area was already correctly
+seen as "not over an ImGui window" before docking existed. `DockBuilderGetNode()`/
+`IsSplitNode()` mean the layout is only ever *built* the first time this dockspace ID has
+no usable data yet (a genuinely fresh launch, or `imgui.ini` deleted) -- once built,
+ImGui's own `imgui.ini` persistence takes over exactly like every other panel's position
+already did, so a user who manually drags a panel elsewhere keeps that arrangement across
+restarts. Renamed two panels to match Unity's own naming (and the reference sketch): the
+entity list ("Scene" through E3-E8) is now "Hierarchy", and the Asset Browser ("Asset
+Browser" through E6-E8) is now "Assets".
+
+**Testing note**: verifying tab clicks (Console/Assets/Project Hub, all docked into the
+same tab bar) over VNC with `wlrctl` occasionally needed two clicks instead of one -- the
+first sometimes only registered as hover (the tab highlights but the visible content and
+the *other* tab's solid "active" styling don't actually change), confirmed by moving the
+mouse away afterward and finding the old tab still showing as active. This is the same
+general class of "synthetic click can be too fast for a single poll to see as a full
+press-then-release" issue already found and fixed in `SDL2DisplayBackend.cpp` for the
+Editor's *own* mouse handling -- but tab-switching itself is entirely Dear ImGui's own
+vendored internal logic, not code this project owns, so there's nothing to patch here;
+a real second click (or a real user's typically-slower click) works every time.
+
 Mesh resolution is a placeholder GUID → GPU-buffers cache (same pattern as
 `samples/m7_scene_and_prefab`) that only knows about `m1_cube.mesh` — a real GUID →
 cooked-path manifest is Asset Browser territory (Editor step E6), not built yet.

@@ -13,7 +13,10 @@
     },
     "glm",
     "joltphysics",
-    "imgui",
+    {
+      "name": "imgui",
+      "features": ["docking-experimental"]
+    },
     "doctest",
     "nlohmann-json",
     "shaderc",

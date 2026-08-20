@@ -149,6 +149,33 @@ local transform values as if they were world space, since Jolt has no native "pa
 concept for rigid bodies and a correct fix needs a joint/constraint or a per-frame
 kinematic copy, out of scope for this pass.
 
+**Also post-E8**: Undo/Redo (`docs/07-unity-parity-analysis.md`'s former #4 priority item).
+`editor/UndoStack.h` is a small, generic `{undo, redo}` closure stack -- deliberately not
+per-field-type, so every editable value in the Inspector (Transform's Position/Rotation/
+Scale, Mesh's Bounds radius, Collider's Half extents/Radius/Is trigger, Rigidbody's Mass),
+Parent reparenting, and the viewport gizmo drag all push through the exact same `Push()`
+call. Each closure re-resolves its own `ecs::Entity -> component` pointer fresh when it
+actually runs rather than capturing a raw pointer up front (CLAUDE.md rule 4 -- component
+storage can move between frames), so an undo/redo still targets the right entity correctly
+even if a different one is selected by the time it runs. `TrackFieldEdit()` (`editor/
+main.cpp`) is the glue for every ImGui-widget-driven edit: `ImGui::IsItemActivated()`
+captures the field's value when a drag/type gesture starts, `IsItemDeactivatedAfterEdit()`
+pushes one combined undo step when it ends -- an entire click-drag-release becomes one
+undo step, not one per intermediate value the widget reports mid-drag, matching Unity's
+own Inspector undo granularity. Reparenting and the gizmo drag push directly instead
+(reparenting is an instant, discrete action with nothing to batch; the gizmo drives
+`transform->position` from raw mouse state, not an ImGui widget, so there's no
+`IsItemActivated()`/`IsItemDeactivatedAfterEdit()` to hook -- `dragStartEntityPosition`,
+already captured when the drag begins for the drag math itself, plays the same role).
+Ctrl+Z/Ctrl+Y (also Ctrl+Shift+Z) and Undo/Redo buttons in the "Pi-Engine Editor" info
+window both work, gated on `!ImGuiIO::WantCaptureKeyboard` so Ctrl+Z while actually typing
+in a field's own text-edit box means "undo my typing there" (ImGui's own behavior)
+instead of also firing the Editor's undo stack. Verified on Pi4: an Inspector Position
+edit (double-click into text-edit mode + type + Enter, the same wtype-based technique
+already used for E3 Inspector testing since a real click-drag can't be scripted over VNC)
+and a Parent reparent (visibly moved the child into the Scene tree, then back out) both
+round-tripped correctly through Undo then Redo.
+
 Mesh resolution is a placeholder GUID → GPU-buffers cache (same pattern as
 `samples/m7_scene_and_prefab`) that only knows about `m1_cube.mesh` — a real GUID →
 cooked-path manifest is Asset Browser territory (Editor step E6), not built yet.

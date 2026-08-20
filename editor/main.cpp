@@ -1,5 +1,6 @@
 #include "BuildPipeline.h"
 #include "ProjectHub.h"
+#include "UndoStack.h"
 
 #include "engine/asset/AssetGuid.h"
 #include "engine/asset/AssetMeta.h"
@@ -107,6 +108,47 @@ std::string EntityLabel(Entity entity) {
     char buffer[64];
     std::snprintf(buffer, sizeof(buffer), "Entity %u.%u", entity.index, entity.generation);
     return buffer;
+}
+
+// Undo/Redo (post-Editor-E8, docs/07-unity-parity-analysis.md) for a single Inspector
+// field edited via a "drag" or "type a value" ImGui widget (DragFloat*/Checkbox all work
+// the same way). `IsItemActivated()` fires the frame the widget starts being edited (mouse
+// down, or double-click into text-edit mode); `IsItemDeactivatedAfterEdit()` fires the
+// frame the whole gesture ends *and* the value actually changed -- calling this right
+// after such a widget batches an entire click-drag-release into one undo step instead of
+// one per intermediate value the widget reported mid-drag, matching Unity's own Inspector
+// undo granularity. `capturedValue` is the field's value at the moment the gesture started
+// -- must be a variable that survives across frames for the gesture's whole duration
+// (declared alongside the Editor's other persistent per-session state in main(), never a
+// per-frame temporary, since IsItemActivated() and IsItemDeactivatedAfterEdit() fire on
+// different frames). `resolveField` re-locates the live field fresh *inside* the undo/redo
+// closures when they actually run, rather than the closures capturing a raw component
+// pointer up front -- never a permanent raw pointer to a component (CLAUDE.md rule 4:
+// component storage can move in memory between frames).
+template <typename T, typename ResolveFieldFn>
+void TrackFieldEdit(UndoStack& undoStack, World& world, Entity entity, const T& liveValue,
+                    T& capturedValue, ResolveFieldFn resolveField) {
+    if (ImGui::IsItemActivated()) {
+        capturedValue = liveValue;
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        const T oldValue = capturedValue;
+        const T newValue = liveValue;
+        if (oldValue == newValue) {
+            return; // the gesture ended without actually changing anything.
+        }
+        undoStack.Push(
+            [&world, entity, resolveField, oldValue]() {
+                if (T* field = resolveField(world, entity)) {
+                    *field = oldValue;
+                }
+            },
+            [&world, entity, resolveField, newValue]() {
+                if (T* field = resolveField(world, entity)) {
+                    *field = newValue;
+                }
+            });
+    }
 }
 
 // Same depth-format fallback chain as every sample since M1.
@@ -564,6 +606,24 @@ int main(int argc, char** argv) {
     glm::vec2 dragAxisScreenDir(0.0f);   // unit 2D direction of the dragged axis on screen
     float dragScreenPixelsPerWorldUnit = 1.0f;
 
+    // --- Undo/Redo (post-Editor-E8, docs/07-unity-parity-analysis.md) -- one stack for
+    //     the whole Editor session, not per-entity/per-field. Ctrl+Z/Ctrl+Y (also
+    //     Ctrl+Shift+Z) undo/redo whatever was actually edited most recently, regardless
+    //     of what's selected right now -- matches Unity: undo targets the edit, not the
+    //     current selection. The "captured*" fields below are TrackFieldEdit()'s own
+    //     per-widget "value when this edit gesture started" state -- see its own comment
+    //     for why these have to live here (persistent across frames) rather than as
+    //     per-frame locals. ---
+    UndoStack undoStack;
+    glm::vec3 capturedPosition(0.0f);
+    glm::quat capturedRotation(1.0f, 0.0f, 0.0f, 0.0f);
+    glm::vec3 capturedScale(1.0f);
+    float capturedMeshBoundsRadius = 0.0f;
+    glm::vec3 capturedColliderHalfExtents(0.0f);
+    float capturedColliderRadius = 0.0f;
+    bool capturedColliderIsTrigger = false;
+    float capturedRigidbodyMass = 0.0f;
+
     // --- Save status (Editor step E4) -- shown for a few seconds after a Save click so
     //     the button press has visible feedback beyond a stderr line. ---
     std::string saveStatus;
@@ -616,6 +676,24 @@ int main(int argc, char** argv) {
         overlay.NewFrame();
         console.Update();
 
+        // Undo/Redo keyboard shortcuts -- gated on !WantCaptureKeyboard so Ctrl+Z inside
+        // a DragFloat's own text-edit box means "undo my typing there" (ImGui's own
+        // built-in behavior) rather than also firing the Editor's undo stack at the same
+        // time. IsKeyPressed(..., false) (repeat=false) so holding the keys down doesn't
+        // spam-undo every single frame.
+        if (!ImGui::GetIO().WantCaptureKeyboard) {
+            ImGuiIO& io = ImGui::GetIO();
+            if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+                if (io.KeyShift) {
+                    undoStack.Redo();
+                } else {
+                    undoStack.Undo();
+                }
+            } else if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false)) {
+                undoStack.Redo();
+            }
+        }
+
         const float aspect = static_cast<float>(swapchain.GetExtent().width) /
                               static_cast<float>(swapchain.GetExtent().height);
         const glm::mat4 viewProj = camera.GetProjectionMatrix(aspect) * camera.GetViewMatrix();
@@ -628,6 +706,21 @@ int main(int argc, char** argv) {
         ImGui::Separator();
         ImGui::TextUnformatted("Camera: A/D yaw, W/S pitch, Up/Down zoom");
         ImGui::TextUnformatted("Viewport: click to select, drag a gizmo axis to move");
+        ImGui::Separator();
+        // Undo/Redo (post-Editor-E8) -- Ctrl+Z/Ctrl+Y also work (see the keyboard
+        // shortcut handling above), these buttons exist for discoverability and so the
+        // feature is clickable without a keyboard at all.
+        ImGui::BeginDisabled(!undoStack.CanUndo());
+        if (ImGui::Button("Undo")) {
+            undoStack.Undo();
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!undoStack.CanRedo());
+        if (ImGui::Button("Redo")) {
+            undoStack.Redo();
+        }
+        ImGui::EndDisabled();
         ImGui::Separator();
         // Writes back through the same JSON schema LoadScene() reads (docs/06-editor-
         // roadmap.md, E4) -- overwrites scenePath, no "Save As" yet (Editor step E7's
@@ -746,9 +839,30 @@ int main(int argc, char** argv) {
                     const std::string currentParentLabel = transform->parent == engine::ecs::kInvalidEntity
                                                                 ? "None"
                                                                 : EntityLabel(transform->parent);
+                    // One combined undo step per reparent (an instant, discrete action --
+                    // no drag gesture to batch, unlike the DragFloat*s below, so this
+                    // pushes directly instead of going through TrackFieldEdit()).
+                    auto reparentWithUndo = [&](Entity newParent) {
+                        const Entity oldParent = transform->parent;
+                        if (oldParent == newParent) {
+                            return;
+                        }
+                        transform->parent = newParent;
+                        undoStack.Push(
+                            [&world, entity = selectedEntity, oldParent]() {
+                                if (TransformComponent* t = world.GetTransform(entity)) {
+                                    t->parent = oldParent;
+                                }
+                            },
+                            [&world, entity = selectedEntity, newParent]() {
+                                if (TransformComponent* t = world.GetTransform(entity)) {
+                                    t->parent = newParent;
+                                }
+                            });
+                    };
                     if (ImGui::BeginCombo("Parent", currentParentLabel.c_str())) {
                         if (ImGui::Selectable("None", transform->parent == engine::ecs::kInvalidEntity)) {
-                            transform->parent = engine::ecs::kInvalidEntity;
+                            reparentWithUndo(engine::ecs::kInvalidEntity);
                         }
                         for (const Entity candidate : world.Transforms().Entities()) {
                             if (candidate == selectedEntity ||
@@ -758,23 +872,50 @@ int main(int argc, char** argv) {
                             const std::string candidateLabel = EntityLabel(candidate);
                             if (ImGui::Selectable(candidateLabel.c_str(),
                                                   candidate == transform->parent)) {
-                                transform->parent = candidate;
+                                reparentWithUndo(candidate);
                             }
                         }
                         ImGui::EndCombo();
                     }
+
+                    auto resolvePosition = [](World& w, Entity e) -> glm::vec3* {
+                        TransformComponent* t = w.GetTransform(e);
+                        return t != nullptr ? &t->position : nullptr;
+                    };
+                    auto resolveRotation = [](World& w, Entity e) -> glm::quat* {
+                        TransformComponent* t = w.GetTransform(e);
+                        return t != nullptr ? &t->rotation : nullptr;
+                    };
+                    auto resolveScale = [](World& w, Entity e) -> glm::vec3* {
+                        TransformComponent* t = w.GetTransform(e);
+                        return t != nullptr ? &t->scale : nullptr;
+                    };
+
                     ImGui::DragFloat3("Position", &transform->position.x, 0.05f);
+                    TrackFieldEdit(undoStack, world, selectedEntity, transform->position,
+                                   capturedPosition, resolvePosition);
+
                     glm::vec3 eulerDegrees = glm::degrees(glm::eulerAngles(transform->rotation));
                     if (ImGui::DragFloat3("Rotation", &eulerDegrees.x, 1.0f)) {
                         transform->rotation = glm::quat(glm::radians(eulerDegrees));
                     }
+                    TrackFieldEdit(undoStack, world, selectedEntity, transform->rotation,
+                                   capturedRotation, resolveRotation);
+
                     ImGui::DragFloat3("Scale", &transform->scale.x, 0.05f, 0.01f, 100.0f);
+                    TrackFieldEdit(undoStack, world, selectedEntity, transform->scale,
+                                   capturedScale, resolveScale);
                 }
             }
             if (engine::ecs::MeshComponent* mesh = world.GetMesh(selectedEntity)) {
                 if (ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
                     ImGui::Text("GUID: %s", engine::asset::ToString(mesh->meshGuid).c_str());
                     ImGui::DragFloat("Bounds radius", &mesh->boundsRadius, 0.05f, 0.0f, 100.0f);
+                    TrackFieldEdit(undoStack, world, selectedEntity, mesh->boundsRadius,
+                                   capturedMeshBoundsRadius, [](World& w, Entity e) -> float* {
+                                       engine::ecs::MeshComponent* m = w.GetMesh(e);
+                                       return m != nullptr ? &m->boundsRadius : nullptr;
+                                   });
                 }
             }
             if (ColliderComponent* collider = world.GetCollider(selectedEntity)) {
@@ -784,16 +925,37 @@ int main(int argc, char** argv) {
                     if (isBox) {
                         ImGui::DragFloat3("Half extents", &collider->halfExtents.x, 0.05f, 0.01f,
                                           50.0f);
+                        TrackFieldEdit(undoStack, world, selectedEntity, collider->halfExtents,
+                                       capturedColliderHalfExtents,
+                                       [](World& w, Entity e) -> glm::vec3* {
+                                           ColliderComponent* c = w.GetCollider(e);
+                                           return c != nullptr ? &c->halfExtents : nullptr;
+                                       });
                     } else {
                         ImGui::DragFloat("Radius", &collider->radius, 0.05f, 0.01f, 50.0f);
+                        TrackFieldEdit(undoStack, world, selectedEntity, collider->radius,
+                                       capturedColliderRadius, [](World& w, Entity e) -> float* {
+                                           ColliderComponent* c = w.GetCollider(e);
+                                           return c != nullptr ? &c->radius : nullptr;
+                                       });
                     }
                     ImGui::Checkbox("Is trigger", &collider->isTrigger);
+                    TrackFieldEdit(undoStack, world, selectedEntity, collider->isTrigger,
+                                   capturedColliderIsTrigger, [](World& w, Entity e) -> bool* {
+                                       ColliderComponent* c = w.GetCollider(e);
+                                       return c != nullptr ? &c->isTrigger : nullptr;
+                                   });
                 }
             }
             if (engine::ecs::RigidbodyComponent* rigidbody = world.GetRigidbody(selectedEntity)) {
                 if (ImGui::CollapsingHeader("Rigidbody", ImGuiTreeNodeFlags_DefaultOpen)) {
                     ImGui::Text("Body id: %u", rigidbody->bodyId);
                     ImGui::DragFloat("Mass", &rigidbody->mass, 0.1f, 0.01f, 1000.0f);
+                    TrackFieldEdit(undoStack, world, selectedEntity, rigidbody->mass,
+                                   capturedRigidbodyMass, [](World& w, Entity e) -> float* {
+                                       engine::ecs::RigidbodyComponent* r = w.GetRigidbody(e);
+                                       return r != nullptr ? &r->mass : nullptr;
+                                   });
                 }
             }
         } else {
@@ -972,6 +1134,30 @@ int main(int argc, char** argv) {
                 }
             }
             if (inputSystem.WasMouseLeftReleasedThisFrame()) {
+                // One undo step for the whole drag gesture (post-Editor-E8), same
+                // batching reasoning as TrackFieldEdit() above -- but the gizmo drives
+                // transform->position directly from raw mouse state rather than through
+                // an ImGui widget, so there's no IsItemActivated()/
+                // IsItemDeactivatedAfterEdit() to hook; dragStartEntityPosition (already
+                // captured when the drag began, see the drag-start block below) plays the
+                // same role TrackFieldEdit()'s "captured" state does.
+                if (TransformComponent* transform = world.GetTransform(selectedEntity)) {
+                    const glm::vec3 oldPosition = dragStartEntityPosition;
+                    const glm::vec3 newPosition = transform->position;
+                    if (oldPosition != newPosition) {
+                        undoStack.Push(
+                            [&world, entity = selectedEntity, oldPosition]() {
+                                if (TransformComponent* t = world.GetTransform(entity)) {
+                                    t->position = oldPosition;
+                                }
+                            },
+                            [&world, entity = selectedEntity, newPosition]() {
+                                if (TransformComponent* t = world.GetTransform(entity)) {
+                                    t->position = newPosition;
+                                }
+                            });
+                    }
+                }
                 draggingAxis = GizmoAxis::None;
             }
         } else if (!mouseOverImGui && inputSystem.WasMouseLeftPressedThisFrame()) {

@@ -46,15 +46,18 @@ requirements never leak onto the rest of the Editor's own source files); "Play i
 runs the same flow under `gdb`. A follow-up analysis,
 [`docs/07-unity-parity-analysis.md`](docs/07-unity-parity-analysis.md), maps what it would
 take to bring the Editor closer to Unity's own feature set and prioritizes those gaps
-against this project's actual goals — the top three are now done: scene JSON gained a
+against this project's actual goals — the top four are now done: scene JSON gained a
 `"scripts"` field, and Play Mode runs real gameplay scripts (`editor/scripts/RotateScript.h`)
 through a proper Script phase, not just physics/rendering; the Scene View gained real
 mouse support — click directly in the 3D view to select an entity (ray vs. bounding
 sphere), and a draggable X/Y/Z translate gizmo on the selection, instead of only the
-Inspector's numeric fields; and entities can now have a parent — the Scene panel shows the
+Inspector's numeric fields; entities can now have a parent — the Scene panel shows the
 result as a real hierarchy tree, the Inspector can reparent via a combo box, and both the
 Scene View and Play Mode render every entity through its true world-space transform
-(composed from its whole parent chain), not just its raw local one.
+(composed from its whole parent chain), not just its raw local one; and every Inspector
+edit, reparent, and gizmo drag is now undoable (Ctrl+Z/Ctrl+Y, or the Undo/Redo buttons),
+a whole click-drag-release counting as one undo step rather than one per intermediate
+value.
 
 ## Prerequisites
 

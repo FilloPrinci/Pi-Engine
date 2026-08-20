@@ -23,7 +23,7 @@
 | Object selection/manipulation | Partial | Click-select in viewport, move/rotate/scale gizmos, multi-select | Click-select directly in the viewport now works (ray vs. each entity's bounding sphere, closest hit wins) alongside the existing Scene-panel list click, and a translate gizmo (drag a colored axis to move) appears on the selection — real progress, but still translate-only (no rotate/scale gizmo), world-space axes only (no local/global toggle), single selection only, and picking is a sphere approximation so a very flat/elongated mesh (e.g. a thin ground slab) has a picking volume noticeably larger than its visible silhouette |
 | Hierarchy (parent-child) | Partial | Nested transforms, drag-to-reparent | `TransformComponent` has a `parent` field, composed into a real world matrix by `World::GetWorldMatrix()` (Editor Scene View and Play Mode both render through it); the Scene panel shows entities as an indented tree instead of a flat list; the Inspector has a "Parent" combo box for reparenting (cycle-safe via `World::IsDescendantOf()`) — what's missing next to Unity is drag-and-drop reparenting *in* the Hierarchy panel itself (combo box only for now) and per-node collapse/expand (always fully expanded, an accepted v1 simplification) |
 | Inspector — component add/remove | Missing | "Add Component" dropdown, remove via context menu | Inspector only edits components an entity was spawned with; nothing can be added or removed at runtime |
-| Undo/Redo | Missing | Ctrl+Z/Y across the whole Editor | Does not exist in any form |
+| Undo/Redo | Partial | Ctrl+Z/Y across the whole Editor | A generic `UndoStack` (`editor/UndoStack.h`) backs every Inspector field edit (Transform/Mesh/Collider/Rigidbody), Parent reparenting, and the viewport gizmo drag — Ctrl+Z/Ctrl+Y (also Ctrl+Shift+Z) plus Undo/Redo buttons in the Editor's info window; a whole drag-release gesture is one undo step, not one per intermediate value. Not covered yet: Save/Play aren't undoable (neither is meaningful to undo), and there's no visible undo *history* list (just linear back/forward, matching Unity's own default keyboard behavior, just without its optional history window) |
 | Scene saving | Have | Ctrl+S, dirty-flag warning on close | Explicit Save button (E4), no dirty-flag/unsaved-changes prompt |
 | Asset Browser | Partial | Thumbnails, folders, drag-drop into Scene View/Inspector, search | Flat two-column file list (source/cooked), GUID display only, no thumbnails, no drag-drop, no subfolders (E6) |
 | Console panel | Have (minimal) | Filtering by severity, click-to-source, stack traces, collapse duplicates | Scrollback with stderr highlighted red, Clear button — no filtering/collapsing/click-to-source (E5) |
@@ -82,9 +82,12 @@ not by how large the gap looks above:
    (Inspector-driven attach/detach + EXPOSE()d field overrides from the scene document,
    instead of hand-editing JSON) is smaller than what shipped, so it's dropped off this
    top-5 list rather than kept at the top.
-4. **Undo/Redo.** Cheap relative to its payoff once (1)-(2) exist — an Editor without undo
-   actively discourages experimentation, which cuts against "accessible" (`CLAUDE.md`
-   section 1) more than almost anything else on this list.
+4. ~~Undo/Redo.~~ **Done** (`editor/UndoStack.h`, a generic `{undo, redo}` closure stack)
+   — every Inspector field, Parent reparenting, and the gizmo drag now undo/redo as a
+   single step per gesture (Ctrl+Z/Ctrl+Y, or the Undo/Redo buttons). What's left
+   (a visible history list, rather than just linear back/forward) is polish, not the
+   core payoff this was meant to unlock -- an Editor that no longer punishes
+   experimentation.
 5. **Material assets.** Structural and invasive (touches the Renderer, not just the
    Editor), but unlocks per-object color/texture tweaking without a C++ recompile — a
    prerequisite for a non-programmer using this engine at all.

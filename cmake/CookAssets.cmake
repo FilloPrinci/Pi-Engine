@@ -52,8 +52,9 @@ if(TARGET cooker)
 
     # Every GLSL source under shaders/ (docs/03 section 5) -- shared across every sample
     # that uses it (m0_triangle.* only by m0_hello_vulkan, m1_unlit.* by most others,
-    # m7_textured.* by samples/m7_textures), so this is a flat list rather than a
-    # per-sample one, same reasoning as the mesh rule above.
+    # m7_textured.* by samples/m7_textures, m_material_color.* by the Editor's
+    # ForwardLitColorPipeline, post-Editor-E8 material assets), so this is a flat list
+    # rather than a per-sample one, same reasoning as the mesh rule above.
     set(_pi_engine_shader_sources
         "${CMAKE_SOURCE_DIR}/shaders/m0_triangle.vert"
         "${CMAKE_SOURCE_DIR}/shaders/m0_triangle.frag"
@@ -61,6 +62,8 @@ if(TARGET cooker)
         "${CMAKE_SOURCE_DIR}/shaders/m1_unlit.frag"
         "${CMAKE_SOURCE_DIR}/shaders/m7_textured.vert"
         "${CMAKE_SOURCE_DIR}/shaders/m7_textured.frag"
+        "${CMAKE_SOURCE_DIR}/shaders/m_material_color.vert"
+        "${CMAKE_SOURCE_DIR}/shaders/m_material_color.frag"
     )
     set(_pi_engine_cooked_shaders "")
     foreach(shader_source ${_pi_engine_shader_sources})

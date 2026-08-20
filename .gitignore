@@ -34,3 +34,8 @@ Thumbs.db
 
 # Local Pi4 test-device access info (IP, SSH credentials) — never commit, LAN-only secret
 docs/05-remote-test-device-context.md
+
+# Dear ImGui's own layout-persistence file (post-Editor-E8 docking, editor/README.md) —
+# written to the current working directory the first time editor/editor_play runs, purely
+# local UI state (which panel is docked where), never something to commit or share.
+imgui.ini

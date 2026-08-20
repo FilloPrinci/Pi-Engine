@@ -65,4 +65,8 @@ endif()
 target_compile_definitions(editor_play PRIVATE
     PI_ENGINE_SHADER_DIR="${PI_ENGINE_COOKED_SHADER_DIR}"
     PI_ENGINE_COOKED_ASSET_DIR="${PI_ENGINE_COOKED_ASSET_DIR}"
+    # Material assets (post-Editor-E8, renderer/MaterialData.h): Play Mode needs to
+    # resolve a scene entity's materialGuid to a *.material.json path too, same
+    # PI_ENGINE_ASSETS_DIR the Editor's own Asset Browser already reads from above.
+    PI_ENGINE_ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets"
 )

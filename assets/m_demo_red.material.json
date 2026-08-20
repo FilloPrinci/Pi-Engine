@@ -1,0 +1,4 @@
+{
+  "_comment": "Demo material asset (post-Editor-E8, renderer/MaterialData.h) -- a bright red flat tint, referenced by the last entity in editor/assets/demo.scene.json to prove a material-tinted entity actually renders through ForwardLitColorPipeline instead of ForwardLitPipeline's own debug normal-color visualization. Raw JSON, no Cooker binary step (same reasoning as Scene/Prefab documents, see engine/scene/README.md); GUID-tagged via the .meta sidecar sitting right next to this file (m_demo_red.material.json.meta), same mechanism every other asset under assets/ uses.",
+  "tintColor": [0.85, 0.1, 0.1, 1.0]
+}

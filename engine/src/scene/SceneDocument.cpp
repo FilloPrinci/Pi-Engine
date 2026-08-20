@@ -58,6 +58,14 @@ EntityDesc ParseEntity(const nlohmann::json& json) {
         desc.meshBoundsRadius = mesh.value("boundsRadius", desc.meshBoundsRadius);
     }
 
+    if (json.contains("material")) {
+        const auto& material = json.at("material");
+        if (material.contains("guid") && material["guid"].is_string() &&
+            asset::TryParseAssetGuid(material["guid"].get<std::string>(), desc.materialGuid)) {
+            desc.hasMaterial = true;
+        }
+    }
+
     if (json.contains("collider")) {
         const auto& collider = json.at("collider");
         desc.hasCollider = true;
@@ -117,6 +125,12 @@ nlohmann::json WriteEntity(const EntityDesc& desc) {
         mesh["guid"] = asset::ToString(desc.meshGuid);
         mesh["boundsRadius"] = desc.meshBoundsRadius;
         entityJson["mesh"] = mesh;
+    }
+
+    if (desc.hasMaterial) {
+        nlohmann::json material;
+        material["guid"] = asset::ToString(desc.materialGuid);
+        entityJson["material"] = material;
     }
 
     if (desc.hasCollider) {
@@ -243,6 +257,11 @@ std::vector<EntityDesc> ExtractEntityDescs(const ecs::World& world) {
             desc.hasMesh = true;
             desc.meshGuid = mesh->meshGuid;
             desc.meshBoundsRadius = mesh->boundsRadius;
+
+            if (mesh->materialGuid != asset::kInvalidAssetGuid) {
+                desc.hasMaterial = true;
+                desc.materialGuid = mesh->materialGuid;
+            }
         }
 
         if (const ecs::ColliderComponent* collider = world.GetCollider(entity)) {
@@ -292,6 +311,9 @@ std::vector<ecs::Entity> SpawnEntities(ecs::World& world, const std::vector<Enti
             ecs::MeshComponent mesh;
             mesh.meshGuid = desc.meshGuid;
             mesh.boundsRadius = desc.meshBoundsRadius;
+            if (desc.hasMaterial) {
+                mesh.materialGuid = desc.materialGuid;
+            }
             world.AddMesh(entity, mesh);
         }
 

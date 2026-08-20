@@ -65,8 +65,10 @@ add_library(engine_core STATIC
     src/renderer/CookedMesh.cpp
     src/renderer/CookedTexture.cpp
     src/renderer/ForwardLitPipeline.cpp
+    src/renderer/ForwardLitColorPipeline.cpp
     src/renderer/ForwardLitTexturedPipeline.cpp
     src/renderer/FrustumCuller.cpp
+    src/renderer/MaterialData.cpp
     src/renderer/MeshLoader.cpp
     src/rhi/RHIBuffer.cpp
     src/rhi/RHIContext.cpp

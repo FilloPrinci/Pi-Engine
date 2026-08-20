@@ -43,6 +43,7 @@ constexpr const char* kTwoEntityScene = R"({
         {
             "transform": {"position": [1.0, 2.0, 3.0], "scale": [2.0, 2.0, 2.0]},
             "mesh": {"guid": "0123456789abcdef0123456789abcdef", "boundsRadius": 0.87},
+            "material": {"guid": "fedcba9876543210fedcba9876543210"},
             "collider": {"shape": "box", "halfExtents": [0.5, 0.5, 0.5]},
             "rigidbody": {"isStatic": false, "mass": 2.5}
         },
@@ -69,6 +70,11 @@ TEST_CASE("ParseSceneDocument reads transform, mesh, collider, and rigidbody fie
     REQUIRE(engine::asset::TryParseAssetGuid("0123456789abcdef0123456789abcdef", expectedGuid));
     CHECK(first.meshGuid == expectedGuid);
     CHECK(first.meshBoundsRadius == doctest::Approx(0.87f));
+    REQUIRE(first.hasMaterial);
+    AssetGuid expectedMaterialGuid;
+    REQUIRE(engine::asset::TryParseAssetGuid("fedcba9876543210fedcba9876543210",
+                                             expectedMaterialGuid));
+    CHECK(first.materialGuid == expectedMaterialGuid);
     REQUIRE(first.hasCollider);
     CHECK(first.colliderShape == ColliderComponent::ShapeType::Box);
     CHECK(first.colliderHalfExtents == glm::vec3(0.5f));
@@ -78,6 +84,7 @@ TEST_CASE("ParseSceneDocument reads transform, mesh, collider, and rigidbody fie
 
     const EntityDesc& second = entities[1];
     CHECK_FALSE(second.hasMesh);
+    CHECK_FALSE(second.hasMaterial);
     CHECK_FALSE(second.hasRigidbody);
     REQUIRE(second.hasCollider);
     CHECK(second.colliderShape == ColliderComponent::ShapeType::Sphere);
@@ -127,9 +134,14 @@ TEST_CASE("ParseSceneDocument rejects a document with no \"entities\" array") {
 TEST_CASE("SpawnEntities creates ECS components matching each EntityDesc, no PhysicsWorld") {
     World world;
 
+    AssetGuid materialGuid;
+    REQUIRE(engine::asset::TryParseAssetGuid("fedcba9876543210fedcba9876543210", materialGuid));
+
     std::vector<EntityDesc> descs(1);
     descs[0].position = glm::vec3(1.0f, 0.0f, 0.0f);
     descs[0].hasMesh = true;
+    descs[0].hasMaterial = true;
+    descs[0].materialGuid = materialGuid;
     descs[0].hasCollider = true;
     descs[0].hasRigidbody = true;
 
@@ -141,6 +153,7 @@ TEST_CASE("SpawnEntities creates ECS components matching each EntityDesc, no Phy
     REQUIRE(world.HasTransform(entity));
     CHECK(world.GetTransform(entity)->position == glm::vec3(1.0f, 0.0f, 0.0f));
     CHECK(world.HasMesh(entity));
+    CHECK(world.GetMesh(entity)->materialGuid == materialGuid);
     CHECK(world.HasCollider(entity));
     // No PhysicsWorld given -- the ECS component is still added (queued/degraded rather
     // than fatal, see SpawnEntities' own comment), just with no live Jolt body.
@@ -244,6 +257,11 @@ TEST_CASE("ExtractEntityDescs/WriteSceneDocument round-trip preserves transform/
     CHECK(first.scale == glm::vec3(2.0f, 2.0f, 2.0f));
     REQUIRE(first.hasMesh);
     CHECK(first.meshBoundsRadius == doctest::Approx(0.87f));
+    REQUIRE(first.hasMaterial);
+    AssetGuid expectedMaterialGuid;
+    REQUIRE(engine::asset::TryParseAssetGuid("fedcba9876543210fedcba9876543210",
+                                             expectedMaterialGuid));
+    CHECK(first.materialGuid == expectedMaterialGuid);
     REQUIRE(first.hasCollider);
     CHECK(first.colliderShape == ColliderComponent::ShapeType::Box);
     CHECK(first.colliderHalfExtents == glm::vec3(0.5f));
@@ -255,6 +273,7 @@ TEST_CASE("ExtractEntityDescs/WriteSceneDocument round-trip preserves transform/
 
     const EntityDesc& second = reloaded[1];
     CHECK_FALSE(second.hasMesh);
+    CHECK_FALSE(second.hasMaterial);
     REQUIRE(second.hasCollider);
     CHECK(second.colliderShape == ColliderComponent::ShapeType::Sphere);
     CHECK(second.colliderRadius == doctest::Approx(1.5f));

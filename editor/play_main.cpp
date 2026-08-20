@@ -10,8 +10,11 @@
 #include "engine/physics/PhysicsWorld.h"
 #include "engine/platform/InputSystem.h"
 #include "engine/platform/SDL2DisplayBackend.h"
+#include "engine/asset/AssetMeta.h"
 #include "engine/renderer/CookedMesh.h"
+#include "engine/renderer/ForwardLitColorPipeline.h"
 #include "engine/renderer/ForwardLitPipeline.h"
+#include "engine/renderer/MaterialData.h"
 #include "engine/rhi/RHIBuffer.h"
 #include "engine/rhi/RHIContext.h"
 #include "engine/rhi/RHISwapchain.h"
@@ -29,8 +32,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -48,7 +53,9 @@ using engine::physics::PhysicsWorld;
 using engine::platform::InputSystem;
 using engine::platform::Key;
 using engine::platform::SDL2DisplayBackend;
+using engine::renderer::ForwardLitColorPipeline;
 using engine::renderer::ForwardLitPipeline;
+using engine::renderer::MaterialData;
 using engine::renderer::MeshData;
 using engine::rhi::RHIBuffer;
 using engine::rhi::RHIContext;
@@ -180,6 +187,55 @@ int main(int argc, char** argv) {
 
         MeshGpuData* result = gpuData.get();
         meshCache.emplace(guid, std::move(gpuData));
+        return result;
+    };
+
+    // Material assets (post-Editor-E8, renderer/MaterialData.h) -- same GUID -> path index
+    // + load-on-demand cache as editor/main.cpp's own resolveMaterial (see that file's
+    // comment for why this needs a real scan rather than meshCache's hardcoded-path
+    // shortcut). Built once here since PI_ENGINE_ASSETS_DIR doesn't change while
+    // editor_play is running.
+    std::unordered_map<AssetGuid, std::string> materialGuidToPath;
+    {
+        std::error_code errorCode;
+        const std::filesystem::path assetsDir(PI_ENGINE_ASSETS_DIR);
+        if (std::filesystem::exists(assetsDir, errorCode)) {
+            for (const auto& entry : std::filesystem::directory_iterator(assetsDir, errorCode)) {
+                if (!entry.is_regular_file()) {
+                    continue;
+                }
+                const std::string name = entry.path().filename().string();
+                constexpr std::string_view kMaterialSuffix = ".material.json";
+                if (name.size() < kMaterialSuffix.size() ||
+                    name.compare(name.size() - kMaterialSuffix.size(), kMaterialSuffix.size(),
+                                kMaterialSuffix) != 0) {
+                    continue;
+                }
+                const std::string fullPath = entry.path().string();
+                AssetGuid guid;
+                if (engine::asset::TryReadAssetMetaGuid(fullPath.c_str(), guid)) {
+                    materialGuidToPath.emplace(guid, fullPath);
+                }
+            }
+        }
+    }
+
+    std::unordered_map<AssetGuid, std::unique_ptr<MaterialData>> materialCache;
+    auto resolveMaterial = [&](const AssetGuid& guid) -> MaterialData* {
+        auto it = materialCache.find(guid);
+        if (it != materialCache.end()) {
+            return it->second.get();
+        }
+        auto pathIt = materialGuidToPath.find(guid);
+        if (pathIt == materialGuidToPath.end()) {
+            return nullptr;
+        }
+        auto material = std::make_unique<MaterialData>();
+        if (!engine::renderer::LoadMaterial(pathIt->second.c_str(), *material)) {
+            return nullptr;
+        }
+        MaterialData* result = material.get();
+        materialCache.emplace(guid, std::move(material));
         return result;
     };
 
@@ -373,6 +429,15 @@ int main(int argc, char** argv) {
     if (!pipeline.Init(context, renderPass, swapchain.GetExtent(),
                         ShaderPath("m1_unlit.vert.spv").c_str(),
                         ShaderPath("m1_unlit.frag.spv").c_str())) {
+        return EXIT_FAILURE;
+    }
+
+    // Material assets (post-Editor-E8) -- same second pipeline as editor/main.cpp's own
+    // colorPipeline, see that file's comment.
+    ForwardLitColorPipeline colorPipeline;
+    if (!colorPipeline.Init(context, renderPass, swapchain.GetExtent(),
+                            ShaderPath("m_material_color.vert.spv").c_str(),
+                            ShaderPath("m_material_color.frag.spv").c_str())) {
         return EXIT_FAILURE;
     }
 
@@ -595,11 +660,16 @@ int main(int argc, char** argv) {
         renderPassBeginInfo.pClearValues = clearValues;
 
         vkCmdBeginRenderPass(cmd, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-        pipeline.Bind(cmd);
 
+        // Two-pass split by materialGuid, same reasoning as editor/main.cpp's own render
+        // loop (post-Editor-E8 material assets) -- see that file's comment.
+        pipeline.Bind(cmd);
         const auto& meshes = world.Meshes().Data();
         const auto& meshEntities = world.Meshes().Entities();
         for (std::size_t i = 0; i < meshes.size(); ++i) {
+            if (meshes[i].materialGuid != engine::asset::kInvalidAssetGuid) {
+                continue; // drawn in the colorPipeline pass below instead.
+            }
             const TransformComponent* transform = world.GetTransform(meshEntities[i]);
             if (transform == nullptr) {
                 continue;
@@ -620,6 +690,31 @@ int main(int argc, char** argv) {
             // except the one hierarchy example) this is exactly transform->GetMatrix().
             const glm::mat4 mvp = currentViewProj * world.GetWorldMatrix(meshEntities[i]);
             pipeline.PushModelViewProjection(cmd, mvp);
+            vkCmdDrawIndexed(cmd, gpuData->indexCount, 1, 0, 0, 0);
+        }
+
+        colorPipeline.Bind(cmd);
+        for (std::size_t i = 0; i < meshes.size(); ++i) {
+            if (meshes[i].materialGuid == engine::asset::kInvalidAssetGuid) {
+                continue; // drawn in the pipeline pass above instead.
+            }
+            const TransformComponent* transform = world.GetTransform(meshEntities[i]);
+            if (transform == nullptr) {
+                continue;
+            }
+            MeshGpuData* gpuData = resolveMesh(meshes[i].meshGuid);
+            MaterialData* material = resolveMaterial(meshes[i].materialGuid);
+            if (gpuData == nullptr || material == nullptr) {
+                continue;
+            }
+
+            VkBuffer vertexBuffers[] = {gpuData->vertexBuffer.GetHandle()};
+            VkDeviceSize offsets[] = {0};
+            vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+            vkCmdBindIndexBuffer(cmd, gpuData->indexBuffer.GetHandle(), 0, VK_INDEX_TYPE_UINT32);
+
+            const glm::mat4 mvp = currentViewProj * world.GetWorldMatrix(meshEntities[i]);
+            colorPipeline.PushMvpAndTint(cmd, mvp, material->tintColor);
             vkCmdDrawIndexed(cmd, gpuData->indexCount, 1, 0, 0, 0);
         }
 
@@ -708,6 +803,7 @@ int main(int argc, char** argv) {
     }
     overlay.Shutdown();
     pipeline.Shutdown();
+    colorPipeline.Shutdown();
     destroyDepthResources();
     vkDestroyRenderPass(device, renderPass, nullptr);
 

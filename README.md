@@ -46,21 +46,25 @@ requirements never leak onto the rest of the Editor's own source files); "Play i
 runs the same flow under `gdb`. A follow-up analysis,
 [`docs/07-unity-parity-analysis.md`](docs/07-unity-parity-analysis.md), maps what it would
 take to bring the Editor closer to Unity's own feature set and prioritizes those gaps
-against this project's actual goals — the top four are now done: scene JSON gained a
-`"scripts"` field, and Play Mode runs real gameplay scripts (`editor/scripts/RotateScript.h`)
-through a proper Script phase, not just physics/rendering; the Scene View gained real
-mouse support — click directly in the 3D view to select an entity (ray vs. bounding
-sphere), and a draggable X/Y/Z translate gizmo on the selection, instead of only the
-Inspector's numeric fields; entities can now have a parent — the Scene panel shows the
-result as a real hierarchy tree, the Inspector can reparent via a combo box, and both the
-Scene View and Play Mode render every entity through its true world-space transform
-(composed from its whole parent chain), not just its raw local one; and every Inspector
-edit, reparent, and gizmo drag is now undoable (Ctrl+Z/Ctrl+Y, or the Undo/Redo buttons),
-a whole click-drag-release counting as one undo step rather than one per intermediate
-value. The Editor also now uses a real docked panel layout (Hierarchy left, Inspector
-right, Assets/Console/Project Hub tabbed along the bottom, the 3D Scene view filling the
-middle — the classic Unity arrangement, built via Dear ImGui's docking support), rather
-than a set of loosely floating windows.
+against this project's actual goals — all five of that list's original items are now
+done: scene JSON gained a `"scripts"` field, and Play Mode runs real gameplay scripts
+(`editor/scripts/RotateScript.h`) through a proper Script phase, not just
+physics/rendering; the Scene View gained real mouse support — click directly in the 3D
+view to select an entity (ray vs. bounding sphere), and a draggable X/Y/Z translate gizmo
+on the selection, instead of only the Inspector's numeric fields; entities can now have a
+parent — the Scene panel shows the result as a real hierarchy tree, the Inspector can
+reparent via a combo box, and both the Scene View and Play Mode render every entity
+through its true world-space transform (composed from its whole parent chain), not just
+its raw local one; every Inspector edit, reparent, and gizmo drag is now undoable
+(Ctrl+Z/Ctrl+Y, or the Undo/Redo buttons), a whole click-drag-release counting as one undo
+step rather than one per intermediate value; and entities can now carry a material asset
+(`.material.json`, a flat tint color for this v1 scope — texture references are a
+documented follow-up) rendered through a third concrete pipeline,
+`ForwardLitColorPipeline`, with no C++ recompile needed to change how an object looks. The
+Editor also now uses a real docked panel layout (Hierarchy left, Inspector right,
+Assets/Console/Project Hub tabbed along the bottom, the 3D Scene view filling the middle —
+the classic Unity arrangement, built via Dear ImGui's docking support), rather than a set
+of loosely floating windows.
 
 ## Prerequisites
 

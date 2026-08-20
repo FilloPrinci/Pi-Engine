@@ -11,6 +11,7 @@ add_executable(engine_tests
     platform/InputSystemTests.cpp
     renderer/CookedMeshTests.cpp
     renderer/CookedTextureTests.cpp
+    renderer/MaterialDataTests.cpp
     scene/SceneDocumentTests.cpp
     script/ComponentHandleTests.cpp
     script/ScriptRegistryTests.cpp

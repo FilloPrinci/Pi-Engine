@@ -38,6 +38,23 @@
 - `FrustumCuller.h` + `.cpp` -- done (M2): first system to submit real jobs to the Job
   System -- Gribb/Hartmann plane extraction + parallel bounding-sphere test per entity,
   writes `MeshComponent::visible`.
+- `MaterialData.h` + `.cpp` -- done (post-Editor-E8, `docs/07-unity-parity-analysis.md`'s
+  former #5 priority item): the material system `ForwardLitTexturedPipeline`'s own comment
+  above said didn't exist yet -- now it does, scoped down to a flat `tintColor` only for
+  v1 (no texture reference: that needs `RHITexture`/descriptor-set plumbing neither Editor
+  executable has today, only `samples/m7_textures` does). `LoadMaterial()`/
+  `WriteMaterial()` read/write plain `.material.json` (`{"tintColor": [r,g,b,a]}`), no
+  Cooker binary step -- same reasoning Scene/Prefab documents stay raw JSON
+  (`engine/scene/README.md`), GUID-tagged via the same `.meta` sidecar mechanism every
+  other asset under `assets/` uses. Rendered by `ForwardLitColorPipeline` below.
+- `ForwardLitColorPipeline.h` + `.cpp` -- done (post-Editor-E8, alongside `MaterialData.h`
+  above): a third separate concrete pipeline class (CLAUDE.md rule 7, still never an
+  uber-shader with branching) -- same `Vertex` layout and MVP push constant as
+  `ForwardLitPipeline`, plus a `vec4 tintColor` in the same combined push-constant range
+  (`PushMvpAndTint()`, one call instead of two, since both change together every draw). No
+  lighting math (this engine is still unlit-only everywhere), no descriptor sets -- an
+  entity with no material assigned keeps rendering through the original
+  `ForwardLitPipeline` exactly as before, completely unaffected.
 
-Two concrete pipeline classes so far, never an uber-shader with branching (CLAUDE.md
+Three concrete pipeline classes so far, never an uber-shader with branching (CLAUDE.md
 rule 7).

@@ -27,6 +27,13 @@ struct MeshComponent {
     // one shared cube mesh/GPU buffers it loads once at startup, completely unaffected by
     // this field's existence.
     asset::AssetGuid meshGuid = asset::kInvalidAssetGuid;
+
+    // Which material asset (renderer/MaterialData.h, post-Editor-E8) this entity is tinted
+    // with -- kInvalidAssetGuid (the default) means "no material assigned", in which case
+    // the renderer falls back to ForwardLitPipeline's original debug normal-color
+    // visualization (M1's exit criterion), completely unaffected by this field's existence,
+    // exactly like meshGuid's own fallback story above.
+    asset::AssetGuid materialGuid = asset::kInvalidAssetGuid;
 };
 
 } // namespace engine::ecs

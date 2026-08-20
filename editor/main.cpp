@@ -13,7 +13,9 @@
 #include "engine/platform/InputSystem.h"
 #include "engine/platform/SDL2DisplayBackend.h"
 #include "engine/renderer/CookedMesh.h"
+#include "engine/renderer/ForwardLitColorPipeline.h"
 #include "engine/renderer/ForwardLitPipeline.h"
+#include "engine/renderer/MaterialData.h"
 #include "engine/rhi/RHIBuffer.h"
 #include "engine/rhi/RHIContext.h"
 #include "engine/rhi/RHISwapchain.h"
@@ -57,7 +59,9 @@ using engine::ecs::World;
 using engine::platform::InputSystem;
 using engine::platform::Key;
 using engine::platform::SDL2DisplayBackend;
+using engine::renderer::ForwardLitColorPipeline;
 using engine::renderer::ForwardLitPipeline;
+using engine::renderer::MaterialData;
 using engine::renderer::MeshData;
 using engine::rhi::RHIBuffer;
 using engine::rhi::RHIContext;
@@ -360,6 +364,49 @@ int main(int argc, char** argv) {
     const std::vector<std::string> cookedShaderNames =
         ListDirectory(std::string(PI_ENGINE_COOKED_ASSET_DIR) + "/shaders", false);
 
+    // --- Material assets (post-Editor-E8, renderer/MaterialData.h) -- GUID -> path index,
+    //     built once by scanning the same PI_ENGINE_ASSETS_DIR listing above for
+    //     "*.material.json" files and reading each one's .meta sidecar (the same GUID
+    //     mechanism the Source Assets panel already reads from). Unlike meshCache below
+    //     (still hardcoded to a single known mesh path, that struct's own TODO), a material
+    //     can be any file a scene author drops under assets/, so this needs an actual
+    //     lookup rather than a "load this one path and check the GUID matches" shortcut --
+    //     still no engine-wide GUID -> path manifest to lean on instead
+    //     (engine/asset/README.md).
+    std::unordered_map<AssetGuid, std::string> materialGuidToPath;
+    for (const std::string& name : sourceAssetNames) {
+        constexpr std::string_view kMaterialSuffix = ".material.json";
+        if (name.size() < kMaterialSuffix.size() ||
+            name.compare(name.size() - kMaterialSuffix.size(), kMaterialSuffix.size(),
+                        kMaterialSuffix) != 0) {
+            continue;
+        }
+        const std::string fullPath = std::string(PI_ENGINE_ASSETS_DIR) + "/" + name;
+        AssetGuid guid;
+        if (engine::asset::TryReadAssetMetaGuid(fullPath.c_str(), guid)) {
+            materialGuidToPath.emplace(guid, fullPath);
+        }
+    }
+
+    std::unordered_map<AssetGuid, std::unique_ptr<MaterialData>> materialCache;
+    auto resolveMaterial = [&](const AssetGuid& guid) -> MaterialData* {
+        auto it = materialCache.find(guid);
+        if (it != materialCache.end()) {
+            return it->second.get();
+        }
+        auto pathIt = materialGuidToPath.find(guid);
+        if (pathIt == materialGuidToPath.end()) {
+            return nullptr;
+        }
+        auto material = std::make_unique<MaterialData>();
+        if (!engine::renderer::LoadMaterial(pathIt->second.c_str(), *material)) {
+            return nullptr;
+        }
+        MaterialData* result = material.get();
+        materialCache.emplace(guid, std::move(material));
+        return result;
+    };
+
     // --- Project Hub (Editor step E7) -- read once at startup like the listings above;
     //     re-read after RelaunchWithProject() wouldn't matter anyway since this process is
     //     about to quit once that succeeds. ---
@@ -499,6 +546,17 @@ int main(int argc, char** argv) {
     if (!pipeline.Init(context, renderPass, swapchain.GetExtent(),
                         ShaderPath("m1_unlit.vert.spv").c_str(),
                         ShaderPath("m1_unlit.frag.spv").c_str())) {
+        return EXIT_FAILURE;
+    }
+
+    // Material assets (post-Editor-E8) -- a second, separate concrete pipeline (CLAUDE.md
+    // rule 7), bound instead of `pipeline` above only for entities with a material
+    // assigned (see the render loop below). Same render pass/depth setup as `pipeline`,
+    // just a different shader pair/push-constant layout.
+    ForwardLitColorPipeline colorPipeline;
+    if (!colorPipeline.Init(context, renderPass, swapchain.GetExtent(),
+                            ShaderPath("m_material_color.vert.spv").c_str(),
+                            ShaderPath("m_material_color.frag.spv").c_str())) {
         return EXIT_FAILURE;
     }
 
@@ -994,6 +1052,33 @@ int main(int argc, char** argv) {
                                        return m != nullptr ? &m->boundsRadius : nullptr;
                                    });
                 }
+
+                // Material assets (post-Editor-E8, renderer/MaterialData.h) -- read-only,
+                // GUID display only, same "no live-editing UI yet" scope as this file's own
+                // Mesh section had before boundsRadius grew a DragFloat -- there's no
+                // material-editing panel to assign/change a material from here in v1 (see
+                // this feature's own README entry).
+                if (mesh->materialGuid != engine::asset::kInvalidAssetGuid) {
+                    if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
+                        ImGui::Text("GUID: %s",
+                                    engine::asset::ToString(mesh->materialGuid).c_str());
+                        if (MaterialData* material = resolveMaterial(mesh->materialGuid)) {
+                            // ColorButton, not ColorEdit4 -- a swatch with no click-to-open
+                            // picker, so this really is read-only, not just "no inline
+                            // number fields".
+                            ImGui::ColorButton("Tint", ImVec4(material->tintColor.r,
+                                                              material->tintColor.g,
+                                                              material->tintColor.b,
+                                                              material->tintColor.a));
+                            ImGui::SameLine();
+                            ImGui::Text("Tint (%.2f, %.2f, %.2f, %.2f)",
+                                        static_cast<double>(material->tintColor.r),
+                                        static_cast<double>(material->tintColor.g),
+                                        static_cast<double>(material->tintColor.b),
+                                        static_cast<double>(material->tintColor.a));
+                        }
+                    }
+                }
             }
             if (ColliderComponent* collider = world.GetCollider(selectedEntity)) {
                 if (ImGui::CollapsingHeader("Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1440,13 +1525,20 @@ int main(int argc, char** argv) {
         renderPassBeginInfo.pClearValues = clearValues;
 
         vkCmdBeginRenderPass(cmd, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-        pipeline.Bind(cmd);
 
         // Every entity with both a Transform and a Mesh gets drawn, resolved by GUID
-        // through the cache above (same pattern as samples/m7_scene_and_prefab).
+        // through the cache above (same pattern as samples/m7_scene_and_prefab). Bound
+        // pipeline depends on whether the entity has a material assigned (post-Editor-E8,
+        // renderer/MaterialData.h): two passes rather than rebinding per-entity, since
+        // vkCmdBindPipeline is a real state change and entities aren't grouped by material
+        // in world.Meshes()'s own storage order.
+        pipeline.Bind(cmd);
         const auto& meshes = world.Meshes().Data();
         const auto& meshEntities = world.Meshes().Entities();
         for (std::size_t i = 0; i < meshes.size(); ++i) {
+            if (meshes[i].materialGuid != engine::asset::kInvalidAssetGuid) {
+                continue; // drawn in the colorPipeline pass below instead.
+            }
             const TransformComponent* transform = world.GetTransform(meshEntities[i]);
             if (transform == nullptr) {
                 continue;
@@ -1467,6 +1559,31 @@ int main(int argc, char** argv) {
             // entities that still have no parent.
             const glm::mat4 mvp = currentViewProj * world.GetWorldMatrix(meshEntities[i]);
             pipeline.PushModelViewProjection(cmd, mvp);
+            vkCmdDrawIndexed(cmd, gpuData->indexCount, 1, 0, 0, 0);
+        }
+
+        colorPipeline.Bind(cmd);
+        for (std::size_t i = 0; i < meshes.size(); ++i) {
+            if (meshes[i].materialGuid == engine::asset::kInvalidAssetGuid) {
+                continue; // drawn in the pipeline pass above instead.
+            }
+            const TransformComponent* transform = world.GetTransform(meshEntities[i]);
+            if (transform == nullptr) {
+                continue;
+            }
+            MeshGpuData* gpuData = resolveMesh(meshes[i].meshGuid);
+            MaterialData* material = resolveMaterial(meshes[i].materialGuid);
+            if (gpuData == nullptr || material == nullptr) {
+                continue;
+            }
+
+            VkBuffer vertexBuffers[] = {gpuData->vertexBuffer.GetHandle()};
+            VkDeviceSize offsets[] = {0};
+            vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+            vkCmdBindIndexBuffer(cmd, gpuData->indexBuffer.GetHandle(), 0, VK_INDEX_TYPE_UINT32);
+
+            const glm::mat4 mvp = currentViewProj * world.GetWorldMatrix(meshEntities[i]);
+            colorPipeline.PushMvpAndTint(cmd, mvp, material->tintColor);
             vkCmdDrawIndexed(cmd, gpuData->indexCount, 1, 0, 0, 0);
         }
 
@@ -1552,6 +1669,7 @@ int main(int argc, char** argv) {
     }
     overlay.Shutdown();
     pipeline.Shutdown();
+    colorPipeline.Shutdown();
     destroyDepthResources();
     vkDestroyRenderPass(device, renderPass, nullptr);
 

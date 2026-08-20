@@ -37,6 +37,15 @@ struct EntityDesc {
     asset::AssetGuid meshGuid;
     float meshBoundsRadius = 1.0f;
 
+    // Material assets (post-Editor-E8, renderer/MaterialData.h) -- a separate "block" from
+    // Mesh above, same shape/reasoning as it (own has-flag + GUID), because an entity can
+    // have a mesh with no material assigned (falls back to ForwardLitPipeline's debug
+    // normal-color visualization, see MeshComponent::materialGuid's own comment) but not
+    // the reverse -- a material with no mesh has nothing to tint, so hasMaterial only ever
+    // gets set on an entity that also has hasMesh.
+    bool hasMaterial = false;
+    asset::AssetGuid materialGuid;
+
     bool hasCollider = false;
     ecs::ColliderComponent::ShapeType colliderShape = ecs::ColliderComponent::ShapeType::Box;
     glm::vec3 colliderHalfExtents = glm::vec3(0.5f);

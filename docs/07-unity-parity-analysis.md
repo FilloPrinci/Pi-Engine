@@ -31,7 +31,7 @@
 | Play Mode | Partial (deliberate) | Simulates in-place inside the Editor process, editable while playing, exact same window | Launches a genuinely separate process (`editor_play`) with no Editor panels (E8) — **not a gap to close**: there is no C++ hot-reload in this engine, so in-place simulation was never architecturally possible; closing it would mean adding hot-reload, a far larger undertaking than Play Mode itself |
 | Data-driven scripting | Partial | Any MonoBehaviour can be added to any GameObject from the Editor, no recompile | Scene JSON now has a `"scripts": [name, ...]` field (`EntityDesc::scriptNames`) that Play Mode (`editor_play`) attaches via `ScriptRegistry::Create()` and runs every frame (Script phase, before Physics) — real progress, but still not attachable from the Inspector (only by hand-editing JSON) and still bounded by the same structural limit as the row below: a scene can only reference a script type already compiled into `editor_play`'s own binary (today: `editor/scripts/RotateScript.h`), never truly hot-loadable code |
 | Prefab Editor UI | Missing | Visual Prefab editing, nested prefabs, overrides | `engine::scene::Prefab`/`.prefab.json` exist and instantiate correctly (M7), but only from code (`samples/m7_scene_and_prefab`) — no Editor UI to create/edit one |
-| Material/Shader system | Missing (structural) | Material assets, shader graphs, per-material parameter editing in Inspector | No material asset concept at all — `ForwardLitPipeline`/`ForwardLitTexturedPipeline` are hardcoded C++ classes (`CLAUDE.md` rule 7: "every rendering pipeline is a separate concrete class, never an uber-shader with branching"); adding a data-driven material would be a Renderer-level change, not an Editor-level one |
+| Material/Shader system | Partial | Material assets, shader graphs, per-material parameter editing in Inspector | `renderer/MaterialData.h` (`.material.json`, GUID-tagged like any other asset) + `ForwardLitColorPipeline` (a fourth separate concrete pipeline, `CLAUDE.md` rule 7 still honored -- never an uber-shader) give an entity a flat tint color with no C++ recompile; wired through both `editor`/`editor_play` and shown read-only in the Inspector's new "Material" section. **v1 scope only**: no texture reference yet (needs `RHITexture`/descriptor-set plumbing neither Editor executable has today, only `samples/m7_textures` does), no material-assigning UI (GUID has to be hand-edited into the scene JSON), no shader graph -- still a hardcoded shader pair, just data-driven per-entity now instead of fully static |
 | Animation | Missing | Animator/Animation windows, state machines, timeline | No animation system in the engine at all yet |
 | Particles | Missing | Particle System component + visual editor | No particle system in the engine at all yet |
 | UI system | Missing | uGUI/UI Toolkit + visual Canvas editing | No 2D/UI rendering system in the engine at all yet |
@@ -88,12 +88,25 @@ not by how large the gap looks above:
    (a visible history list, rather than just linear back/forward) is polish, not the
    core payoff this was meant to unlock -- an Editor that no longer punishes
    experimentation.
-5. **Material assets.** Structural and invasive (touches the Renderer, not just the
-   Editor), but unlocks per-object color/texture tweaking without a C++ recompile — a
-   prerequisite for a non-programmer using this engine at all.
+5. ~~Material assets.~~ **Done, v1 scope** (`renderer/MaterialData.h`, flat tint color
+   only) — `ForwardLitColorPipeline` (a fourth separate concrete pipeline, `CLAUDE.md`
+   rule 7) renders any entity with a `.material.json` assigned in its own color instead of
+   `ForwardLitPipeline`'s debug normal-color visualization, no C++ recompile needed to
+   change it. Verified end-to-end on Pi4: a red-tinted demo cube renders correctly in both
+   the Editor's Scene View and Play Mode, at 60 FPS capped and 211 FPS uncapped, and
+   visibly orbits its RotateScript'd parent (hierarchy + scripting + materials all
+   composing correctly together). What's left here, deliberately deferred as its own
+   follow-up rather than silently dropped: texture-referencing materials (needs
+   `RHITexture`/descriptor-set plumbing neither `editor/main.cpp` nor
+   `editor/play_main.cpp` have yet) and any Inspector UI to *assign* a material (today
+   it's read-only display; assigning one means hand-editing the scene JSON's `"material"`
+   block).
 
 Everything else in the table (Animation, Particles, UI system, NavMesh, Terrain, full
 Asset Store-style packages, Editor scripting API) is real Unity functionality this Editor
 doesn't have, but none of it blocks the vertical-slice-and-beyond goal the way the five
-items above do — they're "eventually, if the project grows toward needing them," not
-"next."
+items above did — they're "eventually, if the project grows toward needing them," not
+"next." With all five of this list's original items done, the next round of priorities
+(texture-referencing materials, Inspector-driven material/script assignment, drag-and-drop
+Hierarchy reparenting) is picked fresh from the table above rather than pursued as a fixed
+plan, same discipline as the milestone roadmap itself.

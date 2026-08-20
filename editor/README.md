@@ -204,6 +204,39 @@ restarts. Renamed two panels to match Unity's own naming (and the reference sket
 entity list ("Scene" through E3-E8) is now "Hierarchy", and the Asset Browser ("Asset
 Browser" through E6-E8) is now "Assets".
 
+**Also post-E8**: material assets (`docs/07-unity-parity-analysis.md`'s former #5,
+originally-last priority item). `engine::renderer::MaterialData` (`.material.json`, a
+flat `tintColor` only in this v1 -- see that header's own comment for why texture
+references are deferred rather than dropped) is GUID-tagged via the same `.meta` sidecar
+mechanism every other asset under `assets/` uses, and rendered by
+`ForwardLitColorPipeline` -- a third separate concrete pipeline class next to
+`ForwardLitPipeline`/`ForwardLitTexturedPipeline`/(the Cooker-only ones), never a single
+uber-shader with branching (`CLAUDE.md` rule 7). `engine::ecs::MeshComponent` gained a
+`materialGuid` field (default `kInvalidAssetGuid`, meaning "no material assigned"); scene
+JSON gained a matching `"material": {"guid": "..."}` block, parsed/written by
+`SceneDocument.cpp` the same shape as the existing `"mesh"` block. Both `editor/main.cpp`
+and `editor/play_main.cpp` render in two passes per frame -- every mesh entity with no
+material still goes through the original `ForwardLitPipeline` (M1's debug normal-color
+visualization, completely unaffected), every entity *with* one goes through
+`ForwardLitColorPipeline` instead, resolved through a GUID -> `MaterialData` cache built
+by scanning `assets/` for `*.material.json` files and reading each one's `.meta` sidecar
+(there's still no engine-wide GUID -> path manifest to look up instead, the same
+placeholder-cache situation the existing mesh GUID resolution has always been in -- see
+this file's own note on that below). The Inspector gained a read-only "Material" section
+(GUID + a non-interactive color swatch, `ImGui::ColorButton`, not `ColorEdit4` --
+deliberately not draggable/clickable, since there's no material-editing UI to persist a
+change to yet) alongside the existing Mesh section. `editor/assets/demo.scene.json`'s
+hierarchy child cube now also carries a `"material"` block (`assets/m_demo_red.material.json`,
+committed alongside its `.meta` sidecar) as a live example -- verified on Pi4: it renders
+bright red through `ForwardLitColorPipeline` in both the Editor's Scene View and Play
+Mode (where it's also visibly orbiting its RotateScript'd parent, proving materials,
+hierarchy, and scripting all compose correctly together, not just individually), at 60
+FPS capped and 211 FPS uncapped. Two deliberate v1-scope gaps, not silently dropped: no
+texture-referencing materials (needs `RHITexture`/descriptor-set plumbing neither Editor
+executable has yet, only `samples/m7_textures` does) and no Inspector UI to *assign* a
+material to an entity (has to be hand-edited into the scene JSON today, the same
+limitation data-driven script attachment had before this).
+
 **Testing note**: verifying tab clicks (Console/Assets/Project Hub, all docked into the
 same tab bar) over VNC with `wlrctl` occasionally needed two clicks instead of one -- the
 first sometimes only registered as hover (the tab highlights but the visible content and

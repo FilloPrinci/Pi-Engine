@@ -20,8 +20,10 @@
   (so `Update()` never ran) was silently swallowing whatever had been printed, exactly the
   diagnostic output an early-failure path most needs to actually reach the user.
 
-No mouse input-capture handling yet (`ImGuiIO::WantCaptureMouse`/`WantCaptureKeyboard`
-aren't consulted anywhere) -- not an issue in practice through Editor step E5 since the
-Scene View's camera is keyboard-only (A/D/W/S/Up/Down, see `editor/README.md`), so there's
-no actual mouse conflict with ImGui panels yet; will matter once a free-look mouse camera
-is added.
+`ImGuiIO::WantCaptureMouse` is consulted as of post-Editor-E8's viewport picking + gizmo
+(`editor/main.cpp`) -- gates *starting* a new pick/gizmo-drag so clicking an ImGui panel
+never also acts on the 3D view behind it, but doesn't gate an already-started drag's
+continuation/release (stranding it "stuck" if the mouse strays over a panel mid-drag would
+be worse). `WantCaptureKeyboard` still isn't consulted anywhere -- not an issue in practice
+since the Scene View's camera is keyboard-only (A/D/W/S/Up/Down, see `editor/README.md`)
+and no ImGui text field exists yet for stray keystrokes to leak into.

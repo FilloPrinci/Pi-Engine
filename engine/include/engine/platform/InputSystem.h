@@ -24,6 +24,15 @@ public:
     bool WasPressedThisFrame(Key key) const;
     bool WasReleasedThisFrame(Key key) const;
 
+    // Mouse -- same raw-state-plus-edge-detection split as the Key queries above, added
+    // post-E8 for the Editor's viewport picking + translate gizmo (the first consumer that
+    // needed press/release edges, not just held state).
+    float GetMouseX() const;
+    float GetMouseY() const;
+    bool IsMouseLeftHeld() const;
+    bool WasMouseLeftPressedThisFrame() const;
+    bool WasMouseLeftReleasedThisFrame() const;
+
 private:
     InputState m_current;
     InputState m_previous;

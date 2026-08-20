@@ -21,4 +21,24 @@ bool InputSystem::WasReleasedThisFrame(Key key) const {
     return !m_current.keysHeld[index] && m_previous.keysHeld[index];
 }
 
+float InputSystem::GetMouseX() const {
+    return m_current.mouseX;
+}
+
+float InputSystem::GetMouseY() const {
+    return m_current.mouseY;
+}
+
+bool InputSystem::IsMouseLeftHeld() const {
+    return m_current.mouseLeftHeld;
+}
+
+bool InputSystem::WasMouseLeftPressedThisFrame() const {
+    return m_current.mouseLeftHeld && !m_previous.mouseLeftHeld;
+}
+
+bool InputSystem::WasMouseLeftReleasedThisFrame() const {
+    return !m_current.mouseLeftHeld && m_previous.mouseLeftHeld;
+}
+
 } // namespace engine::platform

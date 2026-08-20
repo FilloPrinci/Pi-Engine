@@ -28,11 +28,19 @@ enum class Key {
 // Raw per-frame input snapshot, populated once by IDisplayBackend::PollEvents() at the
 // start of the frame and read by everything downstream (docs/01 section 11.4: "input is
 // read once at the start of the frame, before the Script phase -- every script in the
-// same frame sees the exact same input state"). Keyboard-only in M3; mouse/gamepad are
-// later extensions that don't block the vertical slice (docs/03 section 8).
+// same frame sees the exact same input state"). Keyboard-only through M3-E8; mouse
+// arrived post-E8 for the Editor's viewport picking + translate gizmo (the first real
+// consumer) -- gamepad is still a later extension (docs/03 section 8).
 struct InputState {
     bool quitRequested = false;
     std::array<bool, static_cast<std::size_t>(Key::Count)> keysHeld{};
+
+    // Window-space pixel coordinates, origin top-left (SDL's own convention) -- like
+    // keysHeld, this is raw *held* state only, no edge detection here (InputSystem below
+    // is where press/release edges get computed, same reasoning for both).
+    float mouseX = 0.0f;
+    float mouseY = 0.0f;
+    bool mouseLeftHeld = false;
 };
 
 } // namespace engine::platform

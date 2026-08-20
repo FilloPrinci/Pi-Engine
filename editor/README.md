@@ -98,6 +98,30 @@ binary -- "data-driven" here means *which* linked-in script to use, never truly
 hot-loadable code. A scene referencing an unknown script name just skips it with a stderr
 warning rather than failing to load.
 
+**Also post-E8**: viewport object picking + a translate gizmo (`docs/07-unity-parity-
+analysis.md`'s former #1 priority item). Clicking directly in the Scene View now selects
+the closest entity a ray from the camera actually hits (each entity's Mesh `boundsRadius`
+as a sphere, scaled by its largest scale axis -- an approximation, not exact against the
+real mesh silhouette, so a very flat/elongated mesh like the ground slab has a noticeably
+larger pick volume than its visible footprint) -- the existing Scene-panel list click still
+works exactly as before, this is in addition to it, not instead of it. The selected
+entity gets a draggable X/Y/Z translate gizmo (red/green/blue lines from ImGui's own
+foreground draw list, no new RHI pipeline needed), scaled to stay a roughly constant size
+on screen regardless of distance; dragging an axis moves the entity along it, computed by
+projecting the mouse's screen-space movement onto that axis's own screen-space direction
+(not a full 3D ray-plane intersection -- simpler, and accurate enough at gizmo scale).
+Clicking empty space deselects, matching Unity's own Scene View. Needed real mouse input
+first -- `InputState`/`InputSystem`/`SDL2DisplayBackend` were keyboard-only through E8,
+extended with mouse position + left-button state/edges the same way keyboard already
+worked. One real bug found and fixed while testing this over VNC with `wlrctl` (which has
+no "hold the button for N ms" primitive, so a synthetic click's down-and-up can both land
+inside a single `PollEvents()` poll): a plain `SDL_GetMouseState()` query after the event
+loop would report "never held" for such a click, since both events already happened before
+the query ran -- fixed by latching the held state to `true` for that frame whenever an
+`SDL_MOUSEBUTTONDOWN` event was actually seen during polling, regardless of what the live
+state reads afterward, so a real press-then-release pair always reaches `InputSystem`'s
+edge detection even for a click faster than one frame.
+
 Mesh resolution is a placeholder GUID → GPU-buffers cache (same pattern as
 `samples/m7_scene_and_prefab`) that only knows about `m1_cube.mesh` — a real GUID →
 cooked-path manifest is Asset Browser territory (Editor step E6), not built yet.

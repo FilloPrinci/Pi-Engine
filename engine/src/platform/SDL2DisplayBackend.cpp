@@ -60,6 +60,10 @@ std::vector<const char*> SDL2DisplayBackend::GetRequiredVulkanExtensions() {
 }
 
 void SDL2DisplayBackend::PollEvents(InputState& out) {
+    // A left-button down event seen anywhere in this poll -- see its use below for why
+    // this needs to be latched rather than left to a final SDL_GetMouseState() query.
+    bool mouseLeftDownEventThisPoll = false;
+
     SDL_Event event;
     while (SDL_PollEvent(&event) != 0) {
         if (m_rawEventHandler) {
@@ -69,9 +73,11 @@ void SDL2DisplayBackend::PollEvents(InputState& out) {
             m_shouldQuit = true;
         } else if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE) {
             m_shouldQuit = true;
+        } else if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
+            mouseLeftDownEventThisPoll = true;
         }
-        // Mouse/gamepad translation is a later extension (docs/03 section 8) -- keyboard
-        // only for M3.
+        // Gamepad translation is a later extension (docs/03 section 8) -- keyboard +
+        // mouse only so far.
     }
     out.quitRequested = m_shouldQuit;
 
@@ -92,6 +98,27 @@ void SDL2DisplayBackend::PollEvents(InputState& out) {
     setKey(Key::Right, SDL_SCANCODE_RIGHT);
     setKey(Key::Space, SDL_SCANCODE_SPACE);
     setKey(Key::Escape, SDL_SCANCODE_ESCAPE);
+
+    // Mostly the same "query live state once per frame" approach as SDL_GetKeyboardState
+    // above -- SDL_GetMouseState() gives window-space pixel coordinates (origin top-left)
+    // and a bitmask of currently-held buttons directly -- but unlike a key, a full
+    // click-and-release can complete *within* one PollEvents() call at a normal frame rate
+    // (a fast human click, or -- confirmed the hard way testing the Editor's viewport
+    // picking/gizmo over VNC with wlrctl, which has no "hold for N ms" primitive the way
+    // wtype does for keys -- any synthetic click), which SDL_GetMouseState() alone would
+    // report as never having been held at all: down and up both already happened before
+    // this line runs. mouseLeftDownEventThisPoll (latched from the event loop above) covers
+    // that -- if a down event was seen this poll, the button reports held=true for this
+    // frame regardless of whether it's already back up by now, giving InputSystem's edge
+    // detection a real press-then-release to see across this frame and the next, instead of
+    // silently losing the click.
+    int mouseXInt = 0;
+    int mouseYInt = 0;
+    const Uint32 mouseButtons = SDL_GetMouseState(&mouseXInt, &mouseYInt);
+    out.mouseX = static_cast<float>(mouseXInt);
+    out.mouseY = static_cast<float>(mouseYInt);
+    out.mouseLeftHeld =
+        mouseLeftDownEventThisPoll || (mouseButtons & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
 }
 
 core::Extent2D SDL2DisplayBackend::GetDrawableSize() {

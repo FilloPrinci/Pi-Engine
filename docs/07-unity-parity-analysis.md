@@ -19,8 +19,8 @@
 
 | Area | Status | Unity has | Pi-Engine has |
 |---|---|---|---|
-| Scene View navigation | Partial | Mouse-look free camera, focus-on-selection, gizmos | Keyboard-only orbit camera (A/D/W/S/Up/Down), no gizmos, no focus shortcut |
-| Object selection/manipulation | Partial | Click-select in viewport, move/rotate/scale gizmos, multi-select | Click-select in a list panel only (no viewport picking), Inspector `DragFloat` fields, single selection only |
+| Scene View navigation | Partial | Mouse-look free camera, focus-on-selection, gizmos | Keyboard-only orbit camera (A/D/W/S/Up/Down) — unchanged; a translate gizmo now exists (see below) but there's still no mouse-look and no focus-on-selection shortcut |
+| Object selection/manipulation | Partial | Click-select in viewport, move/rotate/scale gizmos, multi-select | Click-select directly in the viewport now works (ray vs. each entity's bounding sphere, closest hit wins) alongside the existing Scene-panel list click, and a translate gizmo (drag a colored axis to move) appears on the selection — real progress, but still translate-only (no rotate/scale gizmo), world-space axes only (no local/global toggle), single selection only, and picking is a sphere approximation so a very flat/elongated mesh (e.g. a thin ground slab) has a picking volume noticeably larger than its visible silhouette |
 | Hierarchy (parent-child) | Missing | Nested transforms, drag-to-reparent | No parent field on `TransformComponent` at all — every entity is a root |
 | Inspector — component add/remove | Missing | "Add Component" dropdown, remove via context menu | Inspector only edits components an entity was spawned with; nothing can be added or removed at runtime |
 | Undo/Redo | Missing | Ctrl+Z/Y across the whole Editor | Does not exist in any form |
@@ -49,10 +49,19 @@
 Ranked by how much they'd help the stated goal (retro low-poly indie games on Pi4/Pi5),
 not by how large the gap looks above:
 
-1. **Viewport object picking + a translate gizmo.** The single biggest everyday workflow
-   gap — right now every position edit goes through the Inspector's numeric `DragFloat3`,
-   never a click-and-drag in the 3D view itself. This is scene-editing *feel*, which
-   matters far more for an indie-accessible engine than most of the "Missing" rows above.
+1. ~~Viewport object picking + a translate gizmo.~~ **Done** (`editor/main.cpp`: ray-vs-
+   bounding-sphere picking directly in the 3D view, plus a draggable X/Y/Z translate gizmo
+   drawn via ImGui's foreground draw list) — position edits no longer have to go through
+   the Inspector's numeric `DragFloat3` alone. Needed real mouse-input plumbing first
+   (`InputState`/`InputSystem`/`SDL2DisplayBackend` all gained mouse support, previously
+   keyboard-only) and a real bugfix along the way: a synthetic (or very fast real) click
+   whose down-and-up both land inside one `PollEvents()` poll was invisible to a
+   once-per-frame `SDL_GetMouseState()` query — fixed by latching "held" for that frame
+   whenever a down *event* was seen, so InputSystem's press/release edges always see a
+   real (if one-frame) press before a release. What's left here (rotate/scale gizmos,
+   local- vs. world-space toggle, multi-select) is real Unity functionality this still
+   doesn't have, but translate-only was the actual workflow gap, so it's dropped off this
+   top-5 list rather than kept at the top.
 2. **Hierarchy / parent-child transforms.** Almost every real scene needs grouping (a
    vehicle's wheels, a character's held item). This is an ECS-level change first
    (`TransformComponent` needs a parent field and the renderer/physics needs to compose

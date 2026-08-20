@@ -36,3 +36,34 @@ TEST_CASE("WasPressedThisFrame is true only on the frame a key transitions to he
     CHECK_FALSE(input.WasPressedThisFrame(Key::Space));
     CHECK(input.WasReleasedThisFrame(Key::Space));
 }
+
+// Mouse (post-E8, viewport picking + translate gizmo) -- same held/edge split as the Key
+// tests above, mirrored for the one InputState mouse button that exists so far.
+TEST_CASE("Mouse position and left-button state reflect the last Update, with press/release "
+          "edges") {
+    InputSystem input;
+    CHECK_FALSE(input.IsMouseLeftHeld());
+    CHECK_FALSE(input.WasMouseLeftPressedThisFrame());
+    CHECK_FALSE(input.WasMouseLeftReleasedThisFrame());
+
+    InputState state;
+    state.mouseX = 42.0f;
+    state.mouseY = 17.0f;
+    state.mouseLeftHeld = true;
+    input.Update(state);
+    CHECK(input.GetMouseX() == doctest::Approx(42.0f));
+    CHECK(input.GetMouseY() == doctest::Approx(17.0f));
+    CHECK(input.IsMouseLeftHeld());
+    CHECK(input.WasMouseLeftPressedThisFrame());
+    CHECK_FALSE(input.WasMouseLeftReleasedThisFrame());
+
+    // Still held next frame -- no longer a fresh press.
+    input.Update(state);
+    CHECK_FALSE(input.WasMouseLeftPressedThisFrame());
+
+    state.mouseLeftHeld = false;
+    input.Update(state);
+    CHECK_FALSE(input.IsMouseLeftHeld());
+    CHECK_FALSE(input.WasMouseLeftPressedThisFrame());
+    CHECK(input.WasMouseLeftReleasedThisFrame());
+}

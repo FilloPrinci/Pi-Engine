@@ -9,6 +9,7 @@
 #include "engine/debug/Console.h"
 #include "engine/debug/ImGuiOverlay.h"
 #include "engine/ecs/World.h"
+#include "engine/platform/InputSystem.h"
 #include "engine/platform/SDL2DisplayBackend.h"
 #include "engine/renderer/CookedMesh.h"
 #include "engine/renderer/ForwardLitPipeline.h"
@@ -22,11 +23,13 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -43,6 +46,7 @@ using engine::ecs::ColliderComponent;
 using engine::ecs::Entity;
 using engine::ecs::TransformComponent;
 using engine::ecs::World;
+using engine::platform::InputSystem;
 using engine::platform::Key;
 using engine::platform::SDL2DisplayBackend;
 using engine::renderer::ForwardLitPipeline;
@@ -106,6 +110,88 @@ VkFormat ChooseDepthFormat(VkPhysicalDevice physicalDevice) {
         }
     }
     return VK_FORMAT_UNDEFINED;
+}
+
+// --- Viewport object picking + translate gizmo (post-E8, docs/07-unity-parity-analysis.md's
+//     #1 priority item) -- everything below is plain math, no new RHI pipeline: the gizmo
+//     itself is drawn with ImGui's own foreground draw list (2D lines projected from world
+//     space each frame), reusing the ImGui integration E1 already wired in rather than
+//     standing up a whole new debug-line Vulkan pipeline just for Editor-only gizmos. ---
+
+// Inverse of the camera's view-projection transform at one screen pixel: a world-space ray
+// from the near plane through the far plane. `mouseX`/`mouseY` are window-space pixels,
+// origin top-left (SDL's own convention, matches InputState::mouseX/mouseY) -- no Y-flip
+// needed against NDC here because Camera::GetProjectionMatrix() already flips NDC Y to
+// match Vulkan's (and so the screen's) Y-down convention, see its own comment.
+void ScreenPointToRay(float mouseX, float mouseY, float viewportWidth, float viewportHeight,
+                      const glm::mat4& viewProj, glm::vec3& outOrigin, glm::vec3& outDir) {
+    const float ndcX = (2.0f * mouseX) / viewportWidth - 1.0f;
+    const float ndcY = (2.0f * mouseY) / viewportHeight - 1.0f;
+    const glm::mat4 invViewProj = glm::inverse(viewProj);
+    // z=0/z=1 (not the OpenGL -1/1 range) -- GLM_FORCE_DEPTH_ZERO_TO_ONE is set project-wide
+    // (engine/CMakeLists.txt) to match Vulkan's own depth range.
+    glm::vec4 nearPoint = invViewProj * glm::vec4(ndcX, ndcY, 0.0f, 1.0f);
+    glm::vec4 farPoint = invViewProj * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
+    nearPoint /= nearPoint.w;
+    farPoint /= farPoint.w;
+    outOrigin = glm::vec3(nearPoint);
+    outDir = glm::normalize(glm::vec3(farPoint - nearPoint));
+}
+
+// The other direction: a world point's window-space pixel position, for drawing the gizmo
+// (project world-space axis endpoints to 2D each frame) -- same NDC/screen convention as
+// ScreenPointToRay() above, just inverted. `outBehindCamera` lets the caller skip a line
+// endpoint that projects from behind the near plane instead of drawing garbage across the
+// screen.
+glm::vec2 WorldToScreen(const glm::vec3& worldPos, float viewportWidth, float viewportHeight,
+                        const glm::mat4& viewProj, bool& outBehindCamera) {
+    const glm::vec4 clip = viewProj * glm::vec4(worldPos, 1.0f);
+    outBehindCamera = clip.w <= 0.0001f;
+    if (outBehindCamera) {
+        return glm::vec2(0.0f);
+    }
+    const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+    return glm::vec2((ndc.x * 0.5f + 0.5f) * viewportWidth, (ndc.y * 0.5f + 0.5f) * viewportHeight);
+}
+
+// Closest-approach ray/sphere test (entity picking uses MeshComponent::boundsRadius as the
+// sphere, scaled by the entity's largest scale axis -- an approximation, not exact against
+// the real mesh silhouette, but consistent with boundsRadius already being an approximation
+// everywhere else it's used). Returns the smallest positive hit distance in `outT`.
+bool RaySphereIntersect(const glm::vec3& rayOrigin, const glm::vec3& rayDir,
+                        const glm::vec3& sphereCenter, float sphereRadius, float& outT) {
+    const glm::vec3 originToCenter = rayOrigin - sphereCenter;
+    const float b = glm::dot(originToCenter, rayDir);
+    const float c = glm::dot(originToCenter, originToCenter) - sphereRadius * sphereRadius;
+    const float discriminant = b * b - c;
+    if (discriminant < 0.0f) {
+        return false;
+    }
+    const float sqrtDiscriminant = std::sqrt(discriminant);
+    float t = -b - sqrtDiscriminant;
+    if (t < 0.0f) {
+        t = -b + sqrtDiscriminant; // ray origin is inside the sphere
+    }
+    if (t < 0.0f) {
+        return false;
+    }
+    outT = t;
+    return true;
+}
+
+// Point-to-segment distance in screen space -- how the gizmo hit-tests which axis (if any)
+// a click landed on: whichever axis line's on-screen segment is closest to the mouse,
+// within kGizmoPickPixels.
+float DistancePointToSegment(const glm::vec2& point, const glm::vec2& segmentStart,
+                             const glm::vec2& segmentEnd) {
+    const glm::vec2 segment = segmentEnd - segmentStart;
+    const float segmentLengthSq = glm::dot(segment, segment);
+    const float t = segmentLengthSq > 0.0001f
+                        ? glm::clamp(glm::dot(point - segmentStart, segment) / segmentLengthSq,
+                                     0.0f, 1.0f)
+                        : 0.0f;
+    const glm::vec2 closest = segmentStart + segment * t;
+    return glm::length(point - closest);
 }
 
 // Same GUID -> GPU-buffers cache pattern as samples/m7_scene_and_prefab/main.cpp -- see
@@ -454,6 +540,19 @@ int main(int argc, char** argv) {
     //     Editor -- but the check costs nothing and stays correct once something does). ---
     Entity selectedEntity = engine::ecs::kInvalidEntity;
 
+    // --- Viewport picking + translate gizmo (post-E8) -- InputSystem (not raw
+    //     InputState::keysHeld/mouseLeftHeld like the camera above) because gizmo
+    //     interaction genuinely needs press/release *edges*, not just held state: a click
+    //     starts a drag once, a release ends it once, regardless of how many frames the
+    //     button stays down/up in between. ---
+    InputSystem inputSystem;
+    enum class GizmoAxis { None, X, Y, Z };
+    GizmoAxis draggingAxis = GizmoAxis::None;
+    glm::vec2 dragStartMouseScreen(0.0f);
+    glm::vec3 dragStartEntityPosition(0.0f);
+    glm::vec2 dragAxisScreenDir(0.0f);   // unit 2D direction of the dragged axis on screen
+    float dragScreenPixelsPerWorldUnit = 1.0f;
+
     // --- Save status (Editor step E4) -- shown for a few seconds after a Save click so
     //     the button press has visible feedback beyond a stderr line. ---
     std::string saveStatus;
@@ -501,9 +600,14 @@ int main(int argc, char** argv) {
         if (input.keysHeld[static_cast<std::size_t>(Key::Down)]) {
             camera.distance = std::min(kMaxDistance, camera.distance + kZoomSpeed * deltaSeconds);
         }
+        inputSystem.Update(input);
 
         overlay.NewFrame();
         console.Update();
+
+        const float aspect = static_cast<float>(swapchain.GetExtent().width) /
+                              static_cast<float>(swapchain.GetExtent().height);
+        const glm::mat4 viewProj = camera.GetProjectionMatrix(aspect) * camera.GetViewMatrix();
 
         ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_FirstUseEver);
         ImGui::Begin("Pi-Engine Editor");
@@ -512,6 +616,7 @@ int main(int argc, char** argv) {
         ImGui::Text("FPS: %.0f", lastReportedFps);
         ImGui::Separator();
         ImGui::TextUnformatted("Camera: A/D yaw, W/S pitch, Up/Down zoom");
+        ImGui::TextUnformatted("Viewport: click to select, drag a gizmo axis to move");
         ImGui::Separator();
         // Writes back through the same JSON schema LoadScene() reads (docs/06-editor-
         // roadmap.md, E4) -- overwrites scenePath, no "Save As" yet (Editor step E7's
@@ -740,9 +845,185 @@ int main(int argc, char** argv) {
         }
         ImGui::End();
 
-        const float aspect = static_cast<float>(swapchain.GetExtent().width) /
-                              static_cast<float>(swapchain.GetExtent().height);
-        currentViewProj = camera.GetProjectionMatrix(aspect) * camera.GetViewMatrix();
+        // --- Viewport picking + translate gizmo (post-E8) -- only ever acts on a fresh
+        //     mouse press (ImGui::GetIO().WantCaptureMouse gates *starting* something new,
+        //     so clicking an ImGui panel never also picks/drags in the viewport behind it),
+        //     but an already-started drag keeps updating/ends cleanly even if the mouse
+        //     strays over a panel mid-drag -- gating that too would strand the drag "stuck"
+        //     on release. ---
+        const float viewportWidth = static_cast<float>(swapchain.GetExtent().width);
+        const float viewportHeight = static_cast<float>(swapchain.GetExtent().height);
+        const bool mouseOverImGui = ImGui::GetIO().WantCaptureMouse;
+        const glm::vec2 mouseScreen(inputSystem.GetMouseX(), inputSystem.GetMouseY());
+
+        if (draggingAxis != GizmoAxis::None) {
+            if (inputSystem.IsMouseLeftHeld()) {
+                const glm::vec2 mouseDelta = mouseScreen - dragStartMouseScreen;
+                const float screenDistanceAlongAxis = glm::dot(mouseDelta, dragAxisScreenDir);
+                const float worldDelta = screenDistanceAlongAxis / dragScreenPixelsPerWorldUnit;
+                glm::vec3 axisWorld(0.0f);
+                if (draggingAxis == GizmoAxis::X) {
+                    axisWorld = glm::vec3(1.0f, 0.0f, 0.0f);
+                } else if (draggingAxis == GizmoAxis::Y) {
+                    axisWorld = glm::vec3(0.0f, 1.0f, 0.0f);
+                } else {
+                    axisWorld = glm::vec3(0.0f, 0.0f, 1.0f);
+                }
+                if (TransformComponent* transform = world.GetTransform(selectedEntity)) {
+                    transform->position = dragStartEntityPosition + axisWorld * worldDelta;
+                }
+            }
+            if (inputSystem.WasMouseLeftReleasedThisFrame()) {
+                draggingAxis = GizmoAxis::None;
+            }
+        } else if (!mouseOverImGui && inputSystem.WasMouseLeftPressedThisFrame()) {
+            // Try the gizmo first (only meaningful if something is already selected), then
+            // fall back to picking a new entity, then fall back to deselecting.
+            bool startedGizmoDrag = false;
+            if (world.IsAlive(selectedEntity)) {
+                if (TransformComponent* transform = world.GetTransform(selectedEntity)) {
+                    const glm::vec3 cameraEye = glm::vec3(glm::inverse(camera.GetViewMatrix())[3]);
+                    const float distanceToCamera =
+                        std::max(glm::length(transform->position - cameraEye), 0.001f);
+                    const float gizmoWorldLength = std::max(distanceToCamera * 0.15f, 0.3f);
+
+                    bool behindCamera = false;
+                    const glm::vec2 originScreen = WorldToScreen(
+                        transform->position, viewportWidth, viewportHeight, viewProj, behindCamera);
+
+                    struct AxisEntry {
+                        GizmoAxis axis;
+                        glm::vec3 direction;
+                    };
+                    const AxisEntry axes[] = {
+                        {GizmoAxis::X, glm::vec3(1.0f, 0.0f, 0.0f)},
+                        {GizmoAxis::Y, glm::vec3(0.0f, 1.0f, 0.0f)},
+                        {GizmoAxis::Z, glm::vec3(0.0f, 0.0f, 1.0f)},
+                    };
+
+                    constexpr float kGizmoPickPixels = 10.0f;
+                    float closestDistance = kGizmoPickPixels;
+                    GizmoAxis hitAxis = GizmoAxis::None;
+                    glm::vec2 hitAxisScreenDir(0.0f);
+                    float hitScreenPixelsPerWorldUnit = 1.0f;
+
+                    if (!behindCamera) {
+                        for (const AxisEntry& entry : axes) {
+                            bool tipBehindCamera = false;
+                            const glm::vec2 tipScreen = WorldToScreen(
+                                transform->position + entry.direction * gizmoWorldLength,
+                                viewportWidth, viewportHeight, viewProj, tipBehindCamera);
+                            if (tipBehindCamera) {
+                                continue;
+                            }
+                            const float distance =
+                                DistancePointToSegment(mouseScreen, originScreen, tipScreen);
+                            if (distance < closestDistance) {
+                                closestDistance = distance;
+                                hitAxis = entry.axis;
+                                const glm::vec2 screenDelta = tipScreen - originScreen;
+                                const float screenLength = glm::length(screenDelta);
+                                hitAxisScreenDir = screenLength > 0.0001f
+                                                       ? screenDelta / screenLength
+                                                       : glm::vec2(0.0f);
+                                hitScreenPixelsPerWorldUnit =
+                                    std::max(screenLength / gizmoWorldLength, 0.0001f);
+                            }
+                        }
+                    }
+
+                    if (hitAxis != GizmoAxis::None) {
+                        draggingAxis = hitAxis;
+                        dragStartMouseScreen = mouseScreen;
+                        dragStartEntityPosition = transform->position;
+                        dragAxisScreenDir = hitAxisScreenDir;
+                        dragScreenPixelsPerWorldUnit = hitScreenPixelsPerWorldUnit;
+                        startedGizmoDrag = true;
+                    }
+                }
+            }
+
+            if (!startedGizmoDrag) {
+                // No gizmo hit -- pick the closest entity the ray actually hits (Mesh's
+                // boundsRadius as a sphere, scaled by the entity's largest scale axis), or
+                // deselect if the click didn't hit anything (matches Unity's own "click
+                // empty space to deselect").
+                glm::vec3 rayOrigin(0.0f);
+                glm::vec3 rayDir(0.0f);
+                ScreenPointToRay(mouseScreen.x, mouseScreen.y, viewportWidth, viewportHeight,
+                                 viewProj, rayOrigin, rayDir);
+
+                Entity closestEntity = engine::ecs::kInvalidEntity;
+                float closestT = std::numeric_limits<float>::max();
+                const auto& meshesForPicking = world.Meshes().Data();
+                const auto& meshEntitiesForPicking = world.Meshes().Entities();
+                for (std::size_t i = 0; i < meshesForPicking.size(); ++i) {
+                    const Entity candidate = meshEntitiesForPicking[i];
+                    const TransformComponent* candidateTransform = world.GetTransform(candidate);
+                    if (candidateTransform == nullptr) {
+                        continue;
+                    }
+                    const float scaleMax =
+                        std::max({candidateTransform->scale.x, candidateTransform->scale.y,
+                                 candidateTransform->scale.z});
+                    const float radius = meshesForPicking[i].boundsRadius * scaleMax;
+                    float t = 0.0f;
+                    if (RaySphereIntersect(rayOrigin, rayDir, candidateTransform->position, radius,
+                                           t) &&
+                        t < closestT) {
+                        closestT = t;
+                        closestEntity = candidate;
+                    }
+                }
+                selectedEntity = closestEntity;
+            }
+        }
+
+        // --- Gizmo drawing -- ImGui foreground draw list (E1's overlay already renders
+        //     ImGui on top of the 3D scene each frame, see onRender), only when something
+        //     is selected. Same axis endpoints the hit-test above computes -- kept as a
+        //     separate pass rather than merged into it since drawing must happen every
+        //     frame regardless of whether a click happened this frame. ---
+        if (world.IsAlive(selectedEntity)) {
+            if (const TransformComponent* transform = world.GetTransform(selectedEntity)) {
+                const glm::vec3 cameraEye = glm::vec3(glm::inverse(camera.GetViewMatrix())[3]);
+                const float distanceToCamera =
+                    std::max(glm::length(transform->position - cameraEye), 0.001f);
+                const float gizmoWorldLength = std::max(distanceToCamera * 0.15f, 0.3f);
+
+                bool originBehindCamera = false;
+                const glm::vec2 originScreen = WorldToScreen(
+                    transform->position, viewportWidth, viewportHeight, viewProj, originBehindCamera);
+                if (!originBehindCamera) {
+                    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+                    struct AxisDrawEntry {
+                        glm::vec3 direction;
+                        ImU32 color;
+                        GizmoAxis axis;
+                    };
+                    const AxisDrawEntry axesToDraw[] = {
+                        {glm::vec3(1.0f, 0.0f, 0.0f), IM_COL32(230, 60, 60, 255), GizmoAxis::X},
+                        {glm::vec3(0.0f, 1.0f, 0.0f), IM_COL32(60, 220, 60, 255), GizmoAxis::Y},
+                        {glm::vec3(0.0f, 0.0f, 1.0f), IM_COL32(70, 130, 240, 255), GizmoAxis::Z},
+                    };
+                    for (const AxisDrawEntry& entry : axesToDraw) {
+                        bool tipBehindCamera = false;
+                        const glm::vec2 tipScreen = WorldToScreen(
+                            transform->position + entry.direction * gizmoWorldLength,
+                            viewportWidth, viewportHeight, viewProj, tipBehindCamera);
+                        if (tipBehindCamera) {
+                            continue;
+                        }
+                        const float thickness = draggingAxis == entry.axis ? 5.0f : 3.0f;
+                        drawList->AddLine(ImVec2(originScreen.x, originScreen.y),
+                                          ImVec2(tipScreen.x, tipScreen.y), entry.color, thickness);
+                        drawList->AddCircleFilled(ImVec2(tipScreen.x, tipScreen.y), 4.0f, entry.color);
+                    }
+                }
+            }
+        }
+
+        currentViewProj = viewProj;
     };
 
     callbacks.onRender = [&]() {

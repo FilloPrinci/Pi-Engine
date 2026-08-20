@@ -46,9 +46,12 @@ requirements never leak onto the rest of the Editor's own source files); "Play i
 runs the same flow under `gdb`. A follow-up analysis,
 [`docs/07-unity-parity-analysis.md`](docs/07-unity-parity-analysis.md), maps what it would
 take to bring the Editor closer to Unity's own feature set and prioritizes those gaps
-against this project's actual goals — the first of which is now done: scene JSON gained a
+against this project's actual goals — the top two are now done: scene JSON gained a
 `"scripts"` field, and Play Mode runs real gameplay scripts (`editor/scripts/RotateScript.h`)
-through a proper Script phase, not just physics/rendering.
+through a proper Script phase, not just physics/rendering; and the Scene View gained real
+mouse support — click directly in the 3D view to select an entity (ray vs. bounding
+sphere), and a draggable X/Y/Z translate gizmo on the selection, instead of only the
+Inspector's numeric fields.
 
 ## Prerequisites
 

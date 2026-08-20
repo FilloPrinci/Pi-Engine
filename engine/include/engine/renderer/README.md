@@ -38,15 +38,30 @@
 - `FrustumCuller.h` + `.cpp` -- done (M2): first system to submit real jobs to the Job
   System -- Gribb/Hartmann plane extraction + parallel bounding-sphere test per entity,
   writes `MeshComponent::visible`.
-- `MaterialData.h` + `.cpp` -- done (post-Editor-E8, `docs/07-unity-parity-analysis.md`'s
-  former #5 priority item): the material system `ForwardLitTexturedPipeline`'s own comment
-  above said didn't exist yet -- now it does, scoped down to a flat `tintColor` only for
-  v1 (no texture reference: that needs `RHITexture`/descriptor-set plumbing neither Editor
-  executable has today, only `samples/m7_textures` does). `LoadMaterial()`/
-  `WriteMaterial()` read/write plain `.material.json` (`{"tintColor": [r,g,b,a]}`), no
-  Cooker binary step -- same reasoning Scene/Prefab documents stay raw JSON
-  (`engine/scene/README.md`), GUID-tagged via the same `.meta` sidecar mechanism every
-  other asset under `assets/` uses. Rendered by `ForwardLitColorPipeline` below.
+- `ShaderPropertySchema.h` + `.cpp` -- done (post-Editor-E8, extending `docs/07-unity-
+  parity-analysis.md`'s former #5 priority item from a fixed tint to a genuinely generic
+  material property system, per explicit follow-up direction: "a material is an instance
+  of a shader -- whatever properties the shader declares should be editable, not just a
+  hardcoded tint"). A fixed, hand-written table of `{shaderName -> [{propertyName,
+  Color|Float|Texture, default}]}` -- the "reflection" substitute this engine uses instead
+  of parsing compiled SPIR-V (no SPIRV-Cross/spirv-reflect dependency): each entry maps
+  1:1 to one of the concrete pipeline classes below, matching that pipeline's own
+  hand-written push-constant/descriptor-set layout. See this header's own comment for why
+  a *generic* property model here doesn't reintroduce the uber-shader CLAUDE.md rule 7
+  forbids -- the genericness lives entirely in this data/dispatch layer, never inside a
+  shader branching at runtime.
+- `MaterialData.h` + `.cpp` -- done (post-Editor-E8, alongside `ShaderPropertySchema.h`
+  above): `{shaderName, properties}` -- `properties` is a `name -> {type, value}` map
+  (`MaterialPropertyValue`, reusing `ShaderPropertyType`), not a hardcoded `tintColor`
+  field, so a material can hold whatever properties its target shader declares, texture
+  references included. `LoadMaterial()`/`WriteMaterial()` read/write plain
+  `.material.json` (`{"shader": "...", "properties": {"tintColor": [r,g,b,a],
+  "albedoTexture": {"guid": "..."}}}` -- a property's own JSON shape says its type, no
+  redundant type tag needed), no Cooker binary step -- same reasoning Scene/Prefab
+  documents stay raw JSON (`engine/scene/README.md`), GUID-tagged via the same `.meta`
+  sidecar mechanism every other asset under `assets/` uses. `GetColor()`/`GetFloat()`/
+  `GetTexture()` return a caller-supplied fallback (the shader's own declared default) for
+  a missing/wrong-typed property rather than asserting.
 - `ForwardLitColorPipeline.h` + `.cpp` -- done (post-Editor-E8, alongside `MaterialData.h`
   above): a third separate concrete pipeline class (CLAUDE.md rule 7, still never an
   uber-shader with branching) -- same `Vertex` layout and MVP push constant as
@@ -54,7 +69,18 @@
   (`PushMvpAndTint()`, one call instead of two, since both change together every draw). No
   lighting math (this engine is still unlit-only everywhere), no descriptor sets -- an
   entity with no material assigned keeps rendering through the original
-  `ForwardLitPipeline` exactly as before, completely unaffected.
+  `ForwardLitPipeline` exactly as before, completely unaffected. Backs
+  `ShaderPropertySchema.h`'s `"ForwardLitColor"` entry.
+- `ForwardLitTexturedColorPipeline.h` + `.cpp` -- done (post-Editor-E8, added when material
+  property editing grew to cover the Texture property type): a fourth separate concrete
+  pipeline class -- `ForwardLitTexturedPipeline`'s single combined-image-sampler
+  descriptor set plus `ForwardLitColorPipeline`'s combined mvp+tintColor push constant;
+  the fragment shader samples then tints. Backs `ShaderPropertySchema.h`'s
+  `"ForwardLitTexturedColor"` entry. Same ownership split as `ForwardLitTexturedPipeline`
+  (owns only the pipeline/descriptor-set *layout*; the descriptor pool and per-material
+  `VkDescriptorSet` are the caller's responsibility -- now `editor/main.cpp`'s/
+  `editor/play_main.cpp`'s own material-texture GPU cache, not one hardcoded demo texture
+  like `samples/m7_textures/main.cpp` still has).
 
-Three concrete pipeline classes so far, never an uber-shader with branching (CLAUDE.md
+Four concrete pipeline classes so far, never an uber-shader with branching (CLAUDE.md
 rule 7).

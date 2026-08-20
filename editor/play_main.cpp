@@ -12,12 +12,15 @@
 #include "engine/platform/SDL2DisplayBackend.h"
 #include "engine/asset/AssetMeta.h"
 #include "engine/renderer/CookedMesh.h"
+#include "engine/renderer/CookedTexture.h"
 #include "engine/renderer/ForwardLitColorPipeline.h"
 #include "engine/renderer/ForwardLitPipeline.h"
+#include "engine/renderer/ForwardLitTexturedColorPipeline.h"
 #include "engine/renderer/MaterialData.h"
 #include "engine/rhi/RHIBuffer.h"
 #include "engine/rhi/RHIContext.h"
 #include "engine/rhi/RHISwapchain.h"
+#include "engine/rhi/RHITexture.h"
 #include "engine/scene/Scene.h"
 #include "engine/script/ScriptComponent.h"
 #include "engine/script/ScriptRegistry.h"
@@ -33,6 +36,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <optional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -55,11 +59,13 @@ using engine::platform::Key;
 using engine::platform::SDL2DisplayBackend;
 using engine::renderer::ForwardLitColorPipeline;
 using engine::renderer::ForwardLitPipeline;
+using engine::renderer::ForwardLitTexturedColorPipeline;
 using engine::renderer::MaterialData;
 using engine::renderer::MeshData;
 using engine::rhi::RHIBuffer;
 using engine::rhi::RHIContext;
 using engine::rhi::RHISwapchain;
+using engine::rhi::RHITexture;
 using engine::script::ScriptComponent;
 using engine::script::ScriptRegistry;
 
@@ -89,8 +95,9 @@ VkFormat ChooseDepthFormat(VkPhysicalDevice physicalDevice) {
     return VK_FORMAT_UNDEFINED;
 }
 
-// Same GUID -> GPU-buffers placeholder cache as editor/main.cpp -- see that file's own
-// comment (mirrors samples/m7_scene_and_prefab's pattern).
+// Same GUID -> GPU-buffers cache as editor/main.cpp -- see that file's own comment
+// (mirrors samples/m7_scene_and_prefab's pattern; resolves any cooked mesh under
+// assets_cooked/, not just one hardcoded file).
 struct MeshGpuData {
     RHIBuffer vertexBuffer;
     RHIBuffer indexBuffer;
@@ -159,6 +166,27 @@ int main(int argc, char** argv) {
 
     VkDevice device = context.GetDevice();
 
+    // Mesh GUID -> cooked-path index, same as editor/main.cpp's own (see that file's
+    // comment) -- built by scanning PI_ENGINE_COOKED_ASSET_DIR for "*.mesh" files and
+    // reading each one's own embedded GUID.
+    std::unordered_map<AssetGuid, std::string> meshGuidToPath;
+    {
+        std::error_code errorCode;
+        const std::filesystem::path cookedDir(PI_ENGINE_COOKED_ASSET_DIR);
+        if (std::filesystem::exists(cookedDir, errorCode)) {
+            for (const auto& entry : std::filesystem::directory_iterator(cookedDir, errorCode)) {
+                if (!entry.is_regular_file() || entry.path().extension() != ".mesh") {
+                    continue;
+                }
+                MeshData probe; // discarded -- resolveMesh() below loads it for real.
+                AssetGuid guid;
+                if (engine::renderer::LoadCookedMesh(entry.path().string().c_str(), probe, &guid)) {
+                    meshGuidToPath.emplace(guid, entry.path().string());
+                }
+            }
+        }
+    }
+
     std::unordered_map<AssetGuid, std::unique_ptr<MeshGpuData>> meshCache;
     auto resolveMesh = [&](const AssetGuid& guid) -> MeshGpuData* {
         auto it = meshCache.find(guid);
@@ -166,11 +194,13 @@ int main(int argc, char** argv) {
             return it->second.get();
         }
 
+        auto pathIt = meshGuidToPath.find(guid);
+        if (pathIt == meshGuidToPath.end()) {
+            return nullptr;
+        }
+
         MeshData meshData;
-        AssetGuid loadedGuid;
-        if (!engine::renderer::LoadCookedMesh(CookedAssetPath("m1_cube.mesh").c_str(), meshData,
-                                              &loadedGuid) ||
-            loadedGuid != guid) {
+        if (!engine::renderer::LoadCookedMesh(pathIt->second.c_str(), meshData)) {
             return nullptr;
         }
 
@@ -238,6 +268,36 @@ int main(int argc, char** argv) {
         materialCache.emplace(guid, std::move(material));
         return result;
     };
+
+    // Texture assets (post-Editor-E8, ShaderPropertySchema.h's "Texture" property type) --
+    // same GUID -> source-path index shape as materialGuidToPath above, just for "*.png"
+    // instead of "*.material.json"; see editor/main.cpp's own identical index for the full
+    // reasoning (cooked .tex path derived from the source filename stem, matching
+    // cmake/CookAssets.cmake's own naming convention).
+    std::unordered_map<AssetGuid, std::string> textureGuidToPath;
+    {
+        std::error_code errorCode;
+        const std::filesystem::path assetsDir(PI_ENGINE_ASSETS_DIR);
+        if (std::filesystem::exists(assetsDir, errorCode)) {
+            for (const auto& entry : std::filesystem::directory_iterator(assetsDir, errorCode)) {
+                if (!entry.is_regular_file()) {
+                    continue;
+                }
+                const std::string name = entry.path().filename().string();
+                constexpr std::string_view kPngSuffix = ".png";
+                if (name.size() < kPngSuffix.size() ||
+                    name.compare(name.size() - kPngSuffix.size(), kPngSuffix.size(),
+                                kPngSuffix) != 0) {
+                    continue;
+                }
+                const std::string fullPath = entry.path().string();
+                AssetGuid guid;
+                if (engine::asset::TryReadAssetMetaGuid(fullPath.c_str(), guid)) {
+                    textureGuidToPath.emplace(guid, fullPath);
+                }
+            }
+        }
+    }
 
     // --- Scene: ECS World + Job System + Physics World -- unlike the Editor's own
     //     read-only Scene View (editor/main.cpp), Play Mode is meant to actually run the
@@ -440,6 +500,100 @@ int main(int argc, char** argv) {
                             ShaderPath("m_material_color.frag.spv").c_str())) {
         return EXIT_FAILURE;
     }
+
+    // Material assets, "ForwardLitTexturedColor" shader (post-Editor-E8) -- same third
+    // pipeline as editor/main.cpp's own texturedColorPipeline, see that file's comment.
+    ForwardLitTexturedColorPipeline texturedColorPipeline;
+    if (!texturedColorPipeline.Init(context, renderPass, swapchain.GetExtent(),
+                                    ShaderPath("m_material_textured_color.vert.spv").c_str(),
+                                    ShaderPath("m_material_textured_color.frag.spv").c_str())) {
+        return EXIT_FAILURE;
+    }
+
+    // Descriptor pool + GPU texture cache for material texture properties -- same shape
+    // as editor/main.cpp's own materialTextureDescriptorPool/resolveMaterialTexture, see
+    // that file's comment for the full reasoning (maxSets=32 fixed cap, RHITexture owns
+    // its own sampler).
+    VkDescriptorPoolSize materialTexturePoolSize{};
+    materialTexturePoolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    materialTexturePoolSize.descriptorCount = 32;
+
+    VkDescriptorPoolCreateInfo materialTexturePoolInfo{};
+    materialTexturePoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    materialTexturePoolInfo.maxSets = 32;
+    materialTexturePoolInfo.poolSizeCount = 1;
+    materialTexturePoolInfo.pPoolSizes = &materialTexturePoolSize;
+
+    VkDescriptorPool materialTextureDescriptorPool = VK_NULL_HANDLE;
+    if (vkCreateDescriptorPool(device, &materialTexturePoolInfo, nullptr,
+                               &materialTextureDescriptorPool) != VK_SUCCESS) {
+        std::fprintf(stderr, "play: vkCreateDescriptorPool (material textures) failed\n");
+        return EXIT_FAILURE;
+    }
+
+    struct MaterialTextureGpuData {
+        RHITexture texture;
+        VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+    };
+    std::unordered_map<AssetGuid, std::unique_ptr<MaterialTextureGpuData>> materialTextureCache;
+    auto resolveMaterialTexture = [&](const AssetGuid& guid) -> MaterialTextureGpuData* {
+        auto it = materialTextureCache.find(guid);
+        if (it != materialTextureCache.end()) {
+            return it->second.get();
+        }
+        auto pathIt = textureGuidToPath.find(guid);
+        if (pathIt == textureGuidToPath.end()) {
+            return nullptr;
+        }
+
+        const std::filesystem::path sourcePath(pathIt->second);
+        const std::string cookedPath =
+            CookedAssetPath((sourcePath.stem().string() + ".tex").c_str());
+
+        engine::renderer::TextureData textureData;
+        AssetGuid loadedGuid;
+        if (!engine::renderer::LoadCookedTexture(cookedPath.c_str(), textureData, &loadedGuid) ||
+            loadedGuid != guid) {
+            return nullptr;
+        }
+
+        auto gpuData = std::make_unique<MaterialTextureGpuData>();
+        if (!gpuData->texture.InitWithData(context, textureData.width, textureData.height,
+                                           textureData.pixels.data(),
+                                           textureData.pixels.size())) {
+            return nullptr;
+        }
+
+        VkDescriptorSetLayout layout = texturedColorPipeline.GetDescriptorSetLayout();
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = materialTextureDescriptorPool;
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &layout;
+        if (vkAllocateDescriptorSets(device, &allocInfo, &gpuData->descriptorSet) != VK_SUCCESS) {
+            std::fprintf(stderr, "play: vkAllocateDescriptorSets (material texture) failed -- "
+                                 "materialTextureDescriptorPool exhausted?\n");
+            return nullptr;
+        }
+
+        VkDescriptorImageInfo imageInfo{};
+        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfo.imageView = gpuData->texture.GetImageView();
+        imageInfo.sampler = gpuData->texture.GetSampler();
+
+        VkWriteDescriptorSet descriptorWrite{};
+        descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrite.dstSet = gpuData->descriptorSet;
+        descriptorWrite.dstBinding = 0;
+        descriptorWrite.descriptorCount = 1;
+        descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptorWrite.pImageInfo = &imageInfo;
+        vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+
+        MaterialTextureGpuData* result = gpuData.get();
+        materialTextureCache.emplace(guid, std::move(gpuData));
+        return result;
+    };
 
     ImGuiOverlay overlay;
     if (!overlay.Init(context, displayBackend, renderPass, swapchain.GetImageCount(),
@@ -661,61 +815,99 @@ int main(int argc, char** argv) {
 
         vkCmdBeginRenderPass(cmd, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-        // Two-pass split by materialGuid, same reasoning as editor/main.cpp's own render
-        // loop (post-Editor-E8 material assets) -- see that file's comment.
-        pipeline.Bind(cmd);
+        // Three-pass split by material shader, same reasoning as editor/main.cpp's own
+        // render loop (post-Editor-E8 material assets, ShaderPropertySchema.h) -- see
+        // that file's comment.
         const auto& meshes = world.Meshes().Data();
         const auto& meshEntities = world.Meshes().Entities();
-        for (std::size_t i = 0; i < meshes.size(); ++i) {
-            if (meshes[i].materialGuid != engine::asset::kInvalidAssetGuid) {
-                continue; // drawn in the colorPipeline pass below instead.
-            }
-            const TransformComponent* transform = world.GetTransform(meshEntities[i]);
-            if (transform == nullptr) {
-                continue;
+
+        struct MeshDrawContext {
+            MeshGpuData* gpuData;
+            glm::mat4 mvp;
+        };
+        auto resolveMeshDraw = [&](std::size_t i) -> std::optional<MeshDrawContext> {
+            if (world.GetTransform(meshEntities[i]) == nullptr) {
+                return std::nullopt;
             }
             MeshGpuData* gpuData = resolveMesh(meshes[i].meshGuid);
             if (gpuData == nullptr) {
-                continue;
+                return std::nullopt;
             }
-
-            VkBuffer vertexBuffers[] = {gpuData->vertexBuffer.GetHandle()};
-            VkDeviceSize offsets[] = {0};
-            vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
-            vkCmdBindIndexBuffer(cmd, gpuData->indexBuffer.GetHandle(), 0, VK_INDEX_TYPE_UINT32);
-
             // World::GetWorldMatrix(), not transform->GetMatrix() -- composes the parent
             // chain (post-Editor-E8 hierarchy, docs/07-unity-parity-analysis.md); for a
             // root entity (the common case, still true of every mesh in the demo scenes
             // except the one hierarchy example) this is exactly transform->GetMatrix().
             const glm::mat4 mvp = currentViewProj * world.GetWorldMatrix(meshEntities[i]);
-            pipeline.PushModelViewProjection(cmd, mvp);
-            vkCmdDrawIndexed(cmd, gpuData->indexCount, 1, 0, 0, 0);
+            return MeshDrawContext{gpuData, mvp};
+        };
+        auto bindMeshBuffers = [&](const MeshGpuData& gpuData) {
+            VkBuffer vertexBuffers[] = {gpuData.vertexBuffer.GetHandle()};
+            VkDeviceSize offsets[] = {0};
+            vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+            vkCmdBindIndexBuffer(cmd, gpuData.indexBuffer.GetHandle(), 0, VK_INDEX_TYPE_UINT32);
+        };
+
+        // Pass 1: no material -- ForwardLitPipeline's original debug normal-color
+        // visualization (M1's exit criterion, untouched).
+        pipeline.Bind(cmd);
+        for (std::size_t i = 0; i < meshes.size(); ++i) {
+            if (meshes[i].materialGuid != engine::asset::kInvalidAssetGuid) {
+                continue;
+            }
+            std::optional<MeshDrawContext> draw = resolveMeshDraw(i);
+            if (!draw) {
+                continue;
+            }
+            bindMeshBuffers(*draw->gpuData);
+            pipeline.PushModelViewProjection(cmd, draw->mvp);
+            vkCmdDrawIndexed(cmd, draw->gpuData->indexCount, 1, 0, 0, 0);
         }
 
+        // Pass 2: material targeting "ForwardLitColor" -- flat tint only.
         colorPipeline.Bind(cmd);
         for (std::size_t i = 0; i < meshes.size(); ++i) {
             if (meshes[i].materialGuid == engine::asset::kInvalidAssetGuid) {
-                continue; // drawn in the pipeline pass above instead.
-            }
-            const TransformComponent* transform = world.GetTransform(meshEntities[i]);
-            if (transform == nullptr) {
                 continue;
             }
-            MeshGpuData* gpuData = resolveMesh(meshes[i].meshGuid);
             MaterialData* material = resolveMaterial(meshes[i].materialGuid);
-            if (gpuData == nullptr || material == nullptr) {
+            if (material == nullptr || material->shaderName != "ForwardLitColor") {
                 continue;
             }
+            std::optional<MeshDrawContext> draw = resolveMeshDraw(i);
+            if (!draw) {
+                continue;
+            }
+            bindMeshBuffers(*draw->gpuData);
+            const glm::vec4 tint = material->GetColor("tintColor", glm::vec4(1.0f));
+            colorPipeline.PushMvpAndTint(cmd, draw->mvp, tint);
+            vkCmdDrawIndexed(cmd, draw->gpuData->indexCount, 1, 0, 0, 0);
+        }
 
-            VkBuffer vertexBuffers[] = {gpuData->vertexBuffer.GetHandle()};
-            VkDeviceSize offsets[] = {0};
-            vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
-            vkCmdBindIndexBuffer(cmd, gpuData->indexBuffer.GetHandle(), 0, VK_INDEX_TYPE_UINT32);
-
-            const glm::mat4 mvp = currentViewProj * world.GetWorldMatrix(meshEntities[i]);
-            colorPipeline.PushMvpAndTint(cmd, mvp, material->tintColor);
-            vkCmdDrawIndexed(cmd, gpuData->indexCount, 1, 0, 0, 0);
+        // Pass 3: material targeting "ForwardLitTexturedColor" -- albedo texture * tint.
+        texturedColorPipeline.Bind(cmd);
+        for (std::size_t i = 0; i < meshes.size(); ++i) {
+            if (meshes[i].materialGuid == engine::asset::kInvalidAssetGuid) {
+                continue;
+            }
+            MaterialData* material = resolveMaterial(meshes[i].materialGuid);
+            if (material == nullptr || material->shaderName != "ForwardLitTexturedColor") {
+                continue;
+            }
+            const AssetGuid textureGuid =
+                material->GetTexture("albedoTexture", engine::asset::kInvalidAssetGuid);
+            auto* textureGpuData = resolveMaterialTexture(textureGuid);
+            if (textureGpuData == nullptr) {
+                continue;
+            }
+            std::optional<MeshDrawContext> draw = resolveMeshDraw(i);
+            if (!draw) {
+                continue;
+            }
+            bindMeshBuffers(*draw->gpuData);
+            texturedColorPipeline.BindDescriptorSet(cmd, textureGpuData->descriptorSet);
+            const glm::vec4 tint = material->GetColor("tintColor", glm::vec4(1.0f));
+            texturedColorPipeline.PushMvpAndTint(cmd, draw->mvp, tint);
+            vkCmdDrawIndexed(cmd, draw->gpuData->indexCount, 1, 0, 0, 0);
         }
 
         overlay.Render(cmd);
@@ -804,9 +996,15 @@ int main(int argc, char** argv) {
     overlay.Shutdown();
     pipeline.Shutdown();
     colorPipeline.Shutdown();
+    texturedColorPipeline.Shutdown();
     destroyDepthResources();
     vkDestroyRenderPass(device, renderPass, nullptr);
 
+    // destroys every RHITexture -- must happen before context.Shutdown(), same reasoning
+    // as meshCache.clear() below.
+    materialTextureCache.clear();
+    // also frees every descriptor set allocated from it.
+    vkDestroyDescriptorPool(device, materialTextureDescriptorPool, nullptr);
     meshCache.clear();
     swapchain.Shutdown();
     context.Shutdown();

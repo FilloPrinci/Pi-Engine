@@ -1,0 +1,8 @@
+{
+  "_comment": "Demo material asset (post-Editor-E8, renderer/MaterialData.h) -- targets the \"ForwardLitTexturedColor\" shader (ShaderPropertySchema.h), proving the Texture property type end-to-end: \"albedoTexture\" references assets/m7_checker.png's own committed Asset GUID (see assets/m7_checker.png.meta, the same checker texture M7's textures step already cooks), tinted light blue. Referenced by editor/assets/demo.scene.json's final entity, which uses assets/m7_quad.gltf's mesh instead of the shared m1_cube.glb specifically because m1_cube.glb has no real UVs (predates TEXCOORD_0) and would just show one flat sampled color instead of the actual checker pattern. A second, distinct live example next to m_demo_red.material.json's flat-color one, so both material shaders this engine has are exercised by the demo scene, not just one.",
+  "shader": "ForwardLitTexturedColor",
+  "properties": {
+    "tintColor": [0.6, 0.75, 1.0, 1.0],
+    "albedoTexture": {"guid": "8e06611feb474017b2807c9c2b3aba62"}
+  }
+}

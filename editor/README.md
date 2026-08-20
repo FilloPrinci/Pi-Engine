@@ -205,37 +205,69 @@ entity list ("Scene" through E3-E8) is now "Hierarchy", and the Asset Browser ("
 Browser" through E6-E8) is now "Assets".
 
 **Also post-E8**: material assets (`docs/07-unity-parity-analysis.md`'s former #5,
-originally-last priority item). `engine::renderer::MaterialData` (`.material.json`, a
-flat `tintColor` only in this v1 -- see that header's own comment for why texture
-references are deferred rather than dropped) is GUID-tagged via the same `.meta` sidecar
-mechanism every other asset under `assets/` uses, and rendered by
-`ForwardLitColorPipeline` -- a third separate concrete pipeline class next to
-`ForwardLitPipeline`/`ForwardLitTexturedPipeline`/(the Cooker-only ones), never a single
-uber-shader with branching (`CLAUDE.md` rule 7). `engine::ecs::MeshComponent` gained a
+originally-last priority item), first shipped scoped to a flat `tintColor` only, then
+extended the same session to a genuinely generic property system per explicit follow-up
+direction: "a material is an instance of a shader -- whatever properties the shader
+declares should be editable, texture included, not just a hardcoded tint."
+`engine::renderer::MaterialData` (`.material.json`) is now `{shaderName, properties}` --
+`properties` is a `name -> {type, value}` map (`ShaderPropertySchema.h`'s
+`ShaderPropertyType`: Color/Float/Texture), not a fixed field, so a material can carry
+whatever its target shader declares. `ShaderPropertySchema.h` is the fixed, hand-written
+table describing each shader's own properties (this engine's stand-in for real shader
+reflection, which it doesn't have) -- each entry maps 1:1 to one of the concrete pipeline
+classes (`ForwardLitColorPipeline`: `tintColor`; `ForwardLitTexturedColorPipeline`:
+`tintColor` + `albedoTexture`), never a single shader branching at runtime on a material's
+data (`CLAUDE.md` rule 7 stays intact -- the genericness lives entirely in this data/
+dispatch layer, see that header's own comment). `engine::ecs::MeshComponent` gained a
 `materialGuid` field (default `kInvalidAssetGuid`, meaning "no material assigned"); scene
 JSON gained a matching `"material": {"guid": "..."}` block, parsed/written by
 `SceneDocument.cpp` the same shape as the existing `"mesh"` block. Both `editor/main.cpp`
-and `editor/play_main.cpp` render in two passes per frame -- every mesh entity with no
-material still goes through the original `ForwardLitPipeline` (M1's debug normal-color
-visualization, completely unaffected), every entity *with* one goes through
-`ForwardLitColorPipeline` instead, resolved through a GUID -> `MaterialData` cache built
-by scanning `assets/` for `*.material.json` files and reading each one's `.meta` sidecar
-(there's still no engine-wide GUID -> path manifest to look up instead, the same
-placeholder-cache situation the existing mesh GUID resolution has always been in -- see
-this file's own note on that below). The Inspector gained a read-only "Material" section
-(GUID + a non-interactive color swatch, `ImGui::ColorButton`, not `ColorEdit4` --
-deliberately not draggable/clickable, since there's no material-editing UI to persist a
-change to yet) alongside the existing Mesh section. `editor/assets/demo.scene.json`'s
-hierarchy child cube now also carries a `"material"` block (`assets/m_demo_red.material.json`,
-committed alongside its `.meta` sidecar) as a live example -- verified on Pi4: it renders
-bright red through `ForwardLitColorPipeline` in both the Editor's Scene View and Play
-Mode (where it's also visibly orbiting its RotateScript'd parent, proving materials,
-hierarchy, and scripting all compose correctly together, not just individually), at 60
-FPS capped and 211 FPS uncapped. Two deliberate v1-scope gaps, not silently dropped: no
-texture-referencing materials (needs `RHITexture`/descriptor-set plumbing neither Editor
-executable has yet, only `samples/m7_textures` does) and no Inspector UI to *assign* a
-material to an entity (has to be hand-edited into the scene JSON today, the same
-limitation data-driven script attachment had before this).
+and `editor/play_main.cpp` render in three passes per frame -- no material -> the original
+`ForwardLitPipeline` (M1's debug normal-color visualization, completely unaffected);
+`"ForwardLitColor"` -> `ForwardLitColorPipeline`; `"ForwardLitTexturedColor"` ->
+`ForwardLitTexturedColorPipeline`, which needed real `RHITexture`/descriptor-set plumbing
+added to both Editor executables (a GUID -> cooked-`.tex` resolver + a fixed-size
+descriptor pool + a GPU texture cache, the same shape as the mesh/material caches already
+there) -- previously only `samples/m7_textures/main.cpp` had any of this. The Inspector's
+"Material" section is now genuinely dynamic: for the material's own shader, it iterates
+that shader's declared properties and renders the matching widget (`ColorEdit4` for
+Color, `DragFloat` for Float, a `Combo` populated from every `*.png` under `assets/` for
+Texture), writing the edit into the live `MaterialData` immediately (so the Scene View
+reflects it the next frame) and persisting to the actual `.material.json` file via
+`WriteMaterial()` on `IsItemDeactivatedAfterEdit()` -- a material is a separate asset
+file, not part of the scene document, so this *is* its save point, not wired into
+`UndoStack` (an accepted gap, same shape as "Save/Play aren't undoable"). Fixed a real,
+adjacent placeholder while wiring the texture demo: mesh GUID resolution (`resolveMesh`)
+used to be hardcoded to always load `m1_cube.mesh` and just check the requested GUID
+matched -- any other mesh silently failed to resolve. Now built from a real GUID ->
+cooked-path index (cooked `.mesh` files already embed their own GUID, `CookedMesh.h`'s own
+format, no `.meta` scan needed the way materials/textures need). `editor/assets/
+demo.scene.json` carries two live examples now: the hierarchy child cube still references
+`assets/m_demo_red.material.json` (`"ForwardLitColor"`, unchanged from the first pass),
+and a new final entity references `assets/m7_quad.gltf`'s mesh (not the shared
+`m1_cube.glb` -- deliberately: that mesh predates `TEXCOORD_0` and every vertex would
+sample a texture at UV (0,0), showing one flat color instead of an actual pattern) +
+`assets/m_demo_checker_tint.material.json` (`"ForwardLitTexturedColor"`, M7's own checker
+texture tinted light blue) -- verified on Pi4: both render correctly side by side in the
+Scene View and Play Mode (where the red cube is also visibly orbiting its RotateScript'd
+parent, proving materials, hierarchy, scripting, and textures all compose together), at
+59-60 FPS capped and 178-211 FPS uncapped. Remaining, deliberate gaps: no Inspector UI to
+*assign/unassign* a material to an entity (has to be hand-edited into the scene JSON,
+same limitation data-driven script attachment had before it), and `Float` properties are
+supported by the type system with no shader actually declaring one yet (not faked just to
+demonstrate it -- added when a real shader needs one, same "add when needed" precedent as
+everywhere else in this codebase).
+
+**Testing note, not a bug**: while verifying material property editing over VNC, a
+material file was found rewritten with default (white tint) values despite no `wlrctl`
+call being issued in that round -- traced to a stale/leftover pointer-click event
+(likely queued by the compositor or a VNC client from an earlier interaction in the same
+long-running session) landing on an Inspector color widget in a freshly-launched process,
+not a code defect: reproduced zero times locally with no input, and zero times on Pi4
+across two more clean launches with careful, deliberate single clicks. Confirms the
+already-documented "materials aren't wired into Undo" gap is a real, if rare, risk for a
+stray click during remote testing -- worth knowing about, not a reason to add complexity
+that wouldn't help a real user typing at a real keyboard.
 
 **Testing note**: verifying tab clicks (Console/Assets/Project Hub, all docked into the
 same tab bar) over VNC with `wlrctl` occasionally needed two clicks instead of one -- the
@@ -248,9 +280,12 @@ Editor's *own* mouse handling -- but tab-switching itself is entirely Dear ImGui
 vendored internal logic, not code this project owns, so there's nothing to patch here;
 a real second click (or a real user's typically-slower click) works every time.
 
-Mesh resolution is a placeholder GUID → GPU-buffers cache (same pattern as
-`samples/m7_scene_and_prefab`) that only knows about `m1_cube.mesh` — a real GUID →
-cooked-path manifest is Asset Browser territory (Editor step E6), not built yet.
+Mesh resolution (`resolveMesh`) is a real GUID → cooked-path index now (fixed alongside
+material assets' Texture property type, see that section above) — every `*.mesh` file
+under `assets_cooked/` is resolvable, not just `m1_cube.mesh`. Still not a real
+general-purpose Asset Manifest (`engine/asset/README.md`) — this Editor's own local index,
+rebuilt fresh every launch by scanning the filesystem, the same shape material/texture
+resolution already use.
 
 See the roadmap doc for what's explicitly deferred to later steps, and
 `docs/07-unity-parity-analysis.md` for what's missing relative to Unity's own editor.

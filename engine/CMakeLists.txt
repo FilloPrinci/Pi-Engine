@@ -67,9 +67,11 @@ add_library(engine_core STATIC
     src/renderer/ForwardLitPipeline.cpp
     src/renderer/ForwardLitColorPipeline.cpp
     src/renderer/ForwardLitTexturedPipeline.cpp
+    src/renderer/ForwardLitTexturedColorPipeline.cpp
     src/renderer/FrustumCuller.cpp
     src/renderer/MaterialData.cpp
     src/renderer/MeshLoader.cpp
+    src/renderer/ShaderPropertySchema.cpp
     src/rhi/RHIBuffer.cpp
     src/rhi/RHIContext.cpp
     src/rhi/RHIPipeline.cpp

@@ -31,7 +31,7 @@
 | Play Mode | Partial (deliberate) | Simulates in-place inside the Editor process, editable while playing, exact same window | Launches a genuinely separate process (`editor_play`) with no Editor panels (E8) — **not a gap to close**: there is no C++ hot-reload in this engine, so in-place simulation was never architecturally possible; closing it would mean adding hot-reload, a far larger undertaking than Play Mode itself |
 | Data-driven scripting | Partial | Any MonoBehaviour can be added to any GameObject from the Editor, no recompile | Scene JSON now has a `"scripts": [name, ...]` field (`EntityDesc::scriptNames`) that Play Mode (`editor_play`) attaches via `ScriptRegistry::Create()` and runs every frame (Script phase, before Physics) — real progress, but still not attachable from the Inspector (only by hand-editing JSON) and still bounded by the same structural limit as the row below: a scene can only reference a script type already compiled into `editor_play`'s own binary (today: `editor/scripts/RotateScript.h`), never truly hot-loadable code |
 | Prefab Editor UI | Missing | Visual Prefab editing, nested prefabs, overrides | `engine::scene::Prefab`/`.prefab.json` exist and instantiate correctly (M7), but only from code (`samples/m7_scene_and_prefab`) — no Editor UI to create/edit one |
-| Material/Shader system | Partial | Material assets, shader graphs, per-material parameter editing in Inspector | `renderer/MaterialData.h` (`.material.json`, GUID-tagged like any other asset) + `ForwardLitColorPipeline` (a fourth separate concrete pipeline, `CLAUDE.md` rule 7 still honored -- never an uber-shader) give an entity a flat tint color with no C++ recompile; wired through both `editor`/`editor_play` and shown read-only in the Inspector's new "Material" section. **v1 scope only**: no texture reference yet (needs `RHITexture`/descriptor-set plumbing neither Editor executable has today, only `samples/m7_textures` does), no material-assigning UI (GUID has to be hand-edited into the scene JSON), no shader graph -- still a hardcoded shader pair, just data-driven per-entity now instead of fully static |
+| Material/Shader system | Partial | Material assets, shader graphs, per-material parameter editing in Inspector | `renderer/MaterialData.h` is a genuinely generic `{shaderName, properties}` model (`ShaderPropertySchema.h`'s hand-written per-shader property table stands in for real shader reflection), not a fixed tint field -- `Color`/`Float`/`Texture` property types, the Inspector renders the right widget per property and edits persist to the `.material.json` file on gesture-end. Two shaders exist so far, each its own concrete pipeline class (`CLAUDE.md` rule 7 still honored -- never an uber-shader): `ForwardLitColor` (flat tint) and `ForwardLitTexturedColor` (texture * tint, needed real `RHITexture`/descriptor-set plumbing added to both Editor executables -- previously only `samples/m7_textures` had any). Wired through `editor`/`editor_play`'s render loop and the Inspector's dynamic "Material" section. Remaining gaps: no material-*assigning* UI (GUID has to be hand-edited into the scene JSON), no shader graph -- still a fixed, small set of hand-written shaders, just with generically-editable per-instance data now instead of one hardcoded tint |
 | Animation | Missing | Animator/Animation windows, state machines, timeline | No animation system in the engine at all yet |
 | Particles | Missing | Particle System component + visual editor | No particle system in the engine at all yet |
 | UI system | Missing | uGUI/UI Toolkit + visual Canvas editing | No 2D/UI rendering system in the engine at all yet |
@@ -88,19 +88,25 @@ not by how large the gap looks above:
    (a visible history list, rather than just linear back/forward) is polish, not the
    core payoff this was meant to unlock -- an Editor that no longer punishes
    experimentation.
-5. ~~Material assets.~~ **Done, v1 scope** (`renderer/MaterialData.h`, flat tint color
-   only) — `ForwardLitColorPipeline` (a fourth separate concrete pipeline, `CLAUDE.md`
-   rule 7) renders any entity with a `.material.json` assigned in its own color instead of
-   `ForwardLitPipeline`'s debug normal-color visualization, no C++ recompile needed to
-   change it. Verified end-to-end on Pi4: a red-tinted demo cube renders correctly in both
-   the Editor's Scene View and Play Mode, at 60 FPS capped and 211 FPS uncapped, and
-   visibly orbits its RotateScript'd parent (hierarchy + scripting + materials all
-   composing correctly together). What's left here, deliberately deferred as its own
-   follow-up rather than silently dropped: texture-referencing materials (needs
-   `RHITexture`/descriptor-set plumbing neither `editor/main.cpp` nor
-   `editor/play_main.cpp` have yet) and any Inspector UI to *assign* a material (today
-   it's read-only display; assigning one means hand-editing the scene JSON's `"material"`
-   block).
+5. ~~Material assets.~~ **Done** — shipped first as a flat-tint-only v1, then extended the
+   same session to a genuinely generic property system (`renderer/MaterialData.h`:
+   `{shaderName, properties}`, `ShaderPropertySchema.h`'s hand-written per-shader property
+   table) per explicit follow-up direction: a material is an instance of a shader, so
+   whatever properties the shader declares should be editable, texture included, not just
+   a hardcoded tint. Two shaders exist so far, each its own concrete pipeline class
+   (`CLAUDE.md` rule 7 still honored): `ForwardLitColorPipeline` (flat tint) and
+   `ForwardLitTexturedColorPipeline` (texture * tint, which needed real `RHITexture`/
+   descriptor-set plumbing added to both `editor/main.cpp` and `editor/play_main.cpp` --
+   previously only `samples/m7_textures` had any). The Inspector's "Material" section is
+   dynamic: it renders the right widget per declared property (color picker, drag-float,
+   or an asset picker for a texture reference) and persists edits to the `.material.json`
+   file on gesture-end. Verified end-to-end on Pi4: a flat-tint red cube and a
+   checker-textured, tinted quad render correctly side by side in both the Editor's Scene
+   View and Play Mode (the red cube also visibly orbiting its RotateScript'd parent,
+   proving hierarchy + scripting + both material shaders compose together), at 59-60 FPS
+   capped and 178-211 FPS uncapped. What's left, deliberately deferred: any Inspector UI to
+   *assign/unassign* a material to an entity (still hand-edited into the scene JSON), and
+   a shader graph (still a fixed, small set of hand-written shaders, not user-composable).
 
 Everything else in the table (Animation, Particles, UI system, NavMesh, Terrain, full
 Asset Store-style packages, Editor scripting API) is real Unity functionality this Editor

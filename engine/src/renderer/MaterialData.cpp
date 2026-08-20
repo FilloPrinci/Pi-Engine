@@ -7,6 +7,48 @@
 
 namespace engine::renderer {
 
+glm::vec4 MaterialData::GetColor(const std::string& name, const glm::vec4& fallback) const {
+    auto it = properties.find(name);
+    if (it == properties.end() || it->second.type != ShaderPropertyType::Color) {
+        return fallback;
+    }
+    return it->second.colorValue;
+}
+
+float MaterialData::GetFloat(const std::string& name, float fallback) const {
+    auto it = properties.find(name);
+    if (it == properties.end() || it->second.type != ShaderPropertyType::Float) {
+        return fallback;
+    }
+    return it->second.floatValue;
+}
+
+asset::AssetGuid MaterialData::GetTexture(const std::string& name, asset::AssetGuid fallback) const {
+    auto it = properties.find(name);
+    if (it == properties.end() || it->second.type != ShaderPropertyType::Texture) {
+        return fallback;
+    }
+    return it->second.textureGuid;
+}
+
+void MaterialData::SetColor(const std::string& name, const glm::vec4& value) {
+    MaterialPropertyValue& entry = properties[name];
+    entry.type = ShaderPropertyType::Color;
+    entry.colorValue = value;
+}
+
+void MaterialData::SetFloat(const std::string& name, float value) {
+    MaterialPropertyValue& entry = properties[name];
+    entry.type = ShaderPropertyType::Float;
+    entry.floatValue = value;
+}
+
+void MaterialData::SetTexture(const std::string& name, asset::AssetGuid value) {
+    MaterialPropertyValue& entry = properties[name];
+    entry.type = ShaderPropertyType::Texture;
+    entry.textureGuid = value;
+}
+
 bool LoadMaterial(const char* path, MaterialData& outMaterial) {
     std::ifstream in(path);
     if (!in.is_open()) {
@@ -24,13 +66,26 @@ bool LoadMaterial(const char* path, MaterialData& outMaterial) {
         in >> document;
 
         MaterialData material;
-        if (document.contains("tintColor")) {
-            const auto& tint = document["tintColor"];
-            if (tint.is_array() && tint.size() == 4) {
-                material.tintColor = glm::vec4(tint[0].get<float>(), tint[1].get<float>(),
-                                               tint[2].get<float>(), tint[3].get<float>());
+        material.shaderName = document.value("shader", std::string());
+
+        if (document.contains("properties") && document["properties"].is_object()) {
+            for (const auto& [name, value] : document["properties"].items()) {
+                if (value.is_array() && value.size() == 4) {
+                    material.SetColor(name, glm::vec4(value[0].get<float>(), value[1].get<float>(),
+                                                       value[2].get<float>(), value[3].get<float>()));
+                } else if (value.is_number()) {
+                    material.SetFloat(name, value.get<float>());
+                } else if (value.is_object() && value.contains("guid") && value["guid"].is_string()) {
+                    asset::AssetGuid guid;
+                    if (asset::TryParseAssetGuid(value["guid"].get<std::string>(), guid)) {
+                        material.SetTexture(name, guid);
+                    }
+                }
+                // Any other shape (a string, a nested array, ...) is silently skipped --
+                // unrecognized, not malformed enough to fail the whole load.
             }
         }
+
         outMaterial = material;
         return true;
     } catch (const nlohmann::json::exception& e) {
@@ -41,8 +96,24 @@ bool LoadMaterial(const char* path, MaterialData& outMaterial) {
 
 bool WriteMaterial(const char* path, const MaterialData& material) {
     nlohmann::json document;
-    document["tintColor"] = nlohmann::json::array({material.tintColor.r, material.tintColor.g,
-                                                   material.tintColor.b, material.tintColor.a});
+    document["shader"] = material.shaderName;
+
+    nlohmann::json properties = nlohmann::json::object();
+    for (const auto& [name, value] : material.properties) {
+        switch (value.type) {
+            case ShaderPropertyType::Color:
+                properties[name] = nlohmann::json::array(
+                    {value.colorValue.r, value.colorValue.g, value.colorValue.b, value.colorValue.a});
+                break;
+            case ShaderPropertyType::Float:
+                properties[name] = value.floatValue;
+                break;
+            case ShaderPropertyType::Texture:
+                properties[name] = nlohmann::json{{"guid", asset::ToString(value.textureGuid)}};
+                break;
+        }
+    }
+    document["properties"] = properties;
 
     std::ofstream out(path);
     if (!out.is_open()) {

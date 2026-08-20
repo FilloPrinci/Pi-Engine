@@ -10,12 +10,18 @@ pi_engine_set_warnings(editor)
 
 # shaders/m1_unlit.{vert,frag}.spv and assets_cooked/m1_cube.mesh (docs/01 section 12.4,
 # cmake/CookAssets.cmake) -- see that file's comment for what happens to these
-# dependencies while cross-compiling.
+# dependencies while cross-compiling. cooked_textures (assets_cooked/*.tex) joined this
+# list once material assets' "Texture" property type (post-Editor-E8) started resolving a
+# material's own albedoTexture reference through a real cooked .tex file, not just
+# samples/m7_textures's own hardcoded one.
 if(TARGET cooked_shaders)
     add_dependencies(editor cooked_shaders)
 endif()
 if(TARGET cooked_assets)
     add_dependencies(editor cooked_assets)
+endif()
+if(TARGET cooked_textures)
+    add_dependencies(editor cooked_textures)
 endif()
 
 # Read back by main.cpp (ShaderPath()/CookedAssetPath()/EditorAssetPath()). editor/assets/
@@ -60,6 +66,9 @@ if(TARGET cooked_shaders)
 endif()
 if(TARGET cooked_assets)
     add_dependencies(editor_play cooked_assets)
+endif()
+if(TARGET cooked_textures)
+    add_dependencies(editor_play cooked_textures)
 endif()
 
 target_compile_definitions(editor_play PRIVATE

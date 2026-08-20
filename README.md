@@ -58,9 +58,12 @@ through its true world-space transform (composed from its whole parent chain), n
 its raw local one; every Inspector edit, reparent, and gizmo drag is now undoable
 (Ctrl+Z/Ctrl+Y, or the Undo/Redo buttons), a whole click-drag-release counting as one undo
 step rather than one per intermediate value; and entities can now carry a material asset
-(`.material.json`, a flat tint color for this v1 scope — texture references are a
-documented follow-up) rendered through a third concrete pipeline,
-`ForwardLitColorPipeline`, with no C++ recompile needed to change how an object looks. The
+(`.material.json`) whose properties are genuinely generic — a material is an instance of a
+shader, and the Inspector edits whatever properties that shader declares (a color picker
+for a tint, an asset picker for a texture reference), not just one hardcoded field — backed
+by a fixed, hand-declared property schema per shader and two concrete pipelines so far
+(`ForwardLitColorPipeline` for a flat tint, `ForwardLitTexturedColorPipeline` for a
+texture times a tint), with no C++ recompile needed to change how an object looks. The
 Editor also now uses a real docked panel layout (Hierarchy left, Inspector right,
 Assets/Console/Project Hub tabbed along the bottom, the 3D Scene view filling the middle —
 the classic Unity arrangement, built via Dear ImGui's docking support), rather than a set

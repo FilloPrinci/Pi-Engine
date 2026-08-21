@@ -67,7 +67,12 @@ texture times a tint), with no C++ recompile needed to change how an object look
 Editor also now uses a real docked panel layout (Hierarchy left, Inspector right,
 Assets/Console/Project Hub tabbed along the bottom, the 3D Scene view filling the middle —
 the classic Unity arrangement, built via Dear ImGui's docking support), rather than a set
-of loosely floating windows.
+of loosely floating windows. Scenes can now be built up entirely from inside the Editor
+too: "Create Empty"/"Create Cube" buttons and a right-click "Delete" in the Hierarchy
+panel, and "Add Component"/"Remove Component" buttons in the Inspector (offering only the
+component types an entity doesn't already have) — a Mesh with no material yet gets an
+"Assign Material" picker instead of a fixed "Add Component" entry, since a material is a
+property of the Mesh, not its own component.
 
 ## Prerequisites
 

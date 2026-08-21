@@ -371,6 +371,21 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Object creation (post-Editor-E8, "make everything the Editor shows manageable") --
+    // the Hierarchy panel's "Create Cube" button and the Inspector's "+ Mesh" button both
+    // need *some* mesh to default a newly-added MeshComponent to; m1_cube.mesh is the one
+    // every sample/demo scene in this project already treats as the default building
+    // block. Resolved by filename here (kInvalidAssetGuid if it isn't cooked, e.g. a
+    // trimmed manifest) rather than a hardcoded GUID string, so it stays correct even if
+    // that file's Asset GUID is ever regenerated.
+    AssetGuid defaultCubeMeshGuid = engine::asset::kInvalidAssetGuid;
+    for (const auto& [guid, path] : meshGuidToPath) {
+        if (std::filesystem::path(path).filename() == "m1_cube.mesh") {
+            defaultCubeMeshGuid = guid;
+            break;
+        }
+    }
+
     // --- Mesh cache (see MeshGpuData's own comment). ---
     std::unordered_map<AssetGuid, std::unique_ptr<MeshGpuData>> meshCache;
     auto resolveMesh = [&](const AssetGuid& guid) -> MeshGpuData* {
@@ -1101,7 +1116,39 @@ int main(int argc, char** argv) {
         //     worth revisiting if a scene ever has enough entities for that to matter.
         //     Docked (see the layout block above) -- no SetNextWindowPos/Size. ---
         ImGui::Begin("Hierarchy");
+
+        // Object creation (post-Editor-E8, "make everything the Editor shows manageable")
+        // -- "Create Empty" is just world.CreateEntity() + AddTransform() (every panel
+        // below already only ever looks at entities with a Transform, so this alone makes
+        // it show up); "Create Cube" additionally adds a MeshComponent pointed at
+        // defaultCubeMeshGuid, the one mesh every sample/demo scene already treats as the
+        // default building block. Not pushed onto undoStack -- see this feature's own
+        // README entry (editor/README.md) for why create/destroy stay outside Undo for
+        // this pass, unlike every field-edit/reparent/component add-remove around it.
+        if (ImGui::Button("Create Empty")) {
+            const Entity newEntity = world.CreateEntity();
+            world.AddTransform(newEntity);
+            selectedEntity = newEntity;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Create Cube")) {
+            const Entity newEntity = world.CreateEntity();
+            world.AddTransform(newEntity);
+            engine::ecs::MeshComponent mesh;
+            mesh.meshGuid = defaultCubeMeshGuid;
+            mesh.boundsRadius = 0.87f; // matches every other cube instance's own value.
+            world.AddMesh(newEntity, mesh);
+            selectedEntity = newEntity;
+        }
+
         const auto& sceneEntities = world.Transforms().Entities();
+
+        // Deferred deletion (post-Editor-E8) -- a right-click "Delete" sets this instead
+        // of calling world.DestroyEntity() immediately, since that would rearrange
+        // ComponentStorage mid-iteration of `sceneEntities` (renderEntityNode() below
+        // walks it recursively while still running). Applied once, after the whole tree
+        // has finished rendering.
+        Entity entityPendingDelete = engine::ecs::kInvalidEntity;
 
         // Deliberately not ImGui::TreeNodeEx()'s own indent-stack push/pop -- an earlier
         // version used that (with expand/collapse arrows) and had a real indent leak bug
@@ -1129,12 +1176,43 @@ int main(int argc, char** argv) {
                 if (ImGui::Selectable(label.c_str(), entity == selectedEntity)) {
                     selectedEntity = entity;
                 }
+                // Right-click context menu (post-Editor-E8) -- BeginPopupContextItem()
+                // targets whichever ImGui item was rendered immediately before it, i.e.
+                // this exact Selectable, so each row gets its own independent popup.
+                if (ImGui::BeginPopupContextItem()) {
+                    if (ImGui::MenuItem("Delete")) {
+                        entityPendingDelete = entity;
+                    }
+                    ImGui::EndPopup();
+                }
                 ImGui::Unindent(static_cast<float>(depth) * 15.0f);
 
                 renderEntityNode(entity, depth + 1);
             }
         };
         renderEntityNode(engine::ecs::kInvalidEntity, 0);
+
+        if (entityPendingDelete != engine::ecs::kInvalidEntity) {
+            // Orphan any children rather than cascade-deleting them -- World::DestroyEntity()
+            // itself doesn't touch other entities' TransformComponent::parent (documented
+            // gap), so this Editor-level fix-up is what keeps a child from being left
+            // pointing at a now-dead handle. Same "missing parent degrades to root" spirit
+            // SpawnEntities() already applies to an out-of-range parentIndex.
+            for (const Entity candidate : sceneEntities) {
+                if (candidate == entityPendingDelete) {
+                    continue;
+                }
+                TransformComponent* candidateTransform = world.GetTransform(candidate);
+                if (candidateTransform != nullptr &&
+                    candidateTransform->parent == entityPendingDelete) {
+                    candidateTransform->parent = engine::ecs::kInvalidEntity;
+                }
+            }
+            if (selectedEntity == entityPendingDelete) {
+                selectedEntity = engine::ecs::kInvalidEntity;
+            }
+            world.DestroyEntity(entityPendingDelete);
+        }
         ImGui::End();
 
         // --- Inspector panel: the selected entity's components, read-only where editing
@@ -1226,6 +1304,7 @@ int main(int argc, char** argv) {
                                    capturedScale, resolveScale);
                 }
             }
+            bool removeMeshRequested = false;
             if (engine::ecs::MeshComponent* mesh = world.GetMesh(selectedEntity)) {
                 if (ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
                     ImGui::Text("GUID: %s", engine::asset::ToString(mesh->meshGuid).c_str());
@@ -1235,6 +1314,14 @@ int main(int argc, char** argv) {
                                        engine::ecs::MeshComponent* m = w.GetMesh(e);
                                        return m != nullptr ? &m->boundsRadius : nullptr;
                                    });
+                    // Remove Component (post-Editor-E8) -- deferred (not
+                    // world.RemoveMesh() called directly here) since `mesh` is a pointer
+                    // straight into ComponentStorage; removing mid-use would invalidate
+                    // it while this very block still reads it below (the Material
+                    // sub-section, materialGuid).
+                    if (ImGui::Button("Remove Mesh")) {
+                        removeMeshRequested = true;
+                    }
                 }
 
                 // Material assets (post-Editor-E8, renderer/MaterialData.h) -- generic
@@ -1336,8 +1423,32 @@ int main(int argc, char** argv) {
                                 }
                             }
                         }
+                        if (ImGui::Button("Remove Material")) {
+                            mesh->materialGuid = engine::asset::kInvalidAssetGuid;
+                        }
+                    }
+                } else if (!materialGuidToPath.empty()) {
+                    // Assign Material (post-Editor-E8, "make everything the Editor shows
+                    // manageable") -- a Mesh with no material yet gets a picker over every
+                    // *.material.json under assets/, same combo shape as the Texture
+                    // property's own asset picker above. Only shown when at least one
+                    // material asset actually exists to pick from.
+                    if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
+                        if (ImGui::BeginCombo("Assign Material", "(none)")) {
+                            for (const auto& [matGuid, matPath] : materialGuidToPath) {
+                                const std::string label =
+                                    std::filesystem::path(matPath).filename().string();
+                                if (ImGui::Selectable(label.c_str())) {
+                                    mesh->materialGuid = matGuid;
+                                }
+                            }
+                            ImGui::EndCombo();
+                        }
                     }
                 }
+            }
+            if (removeMeshRequested) {
+                world.RemoveMesh(selectedEntity);
             }
             if (ColliderComponent* collider = world.GetCollider(selectedEntity)) {
                 if (ImGui::CollapsingHeader("Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1366,6 +1477,9 @@ int main(int argc, char** argv) {
                                        ColliderComponent* c = w.GetCollider(e);
                                        return c != nullptr ? &c->isTrigger : nullptr;
                                    });
+                    if (ImGui::Button("Remove Collider")) {
+                        world.RemoveCollider(selectedEntity);
+                    }
                 }
             }
             if (engine::ecs::RigidbodyComponent* rigidbody = world.GetRigidbody(selectedEntity)) {
@@ -1377,7 +1491,47 @@ int main(int argc, char** argv) {
                                        engine::ecs::RigidbodyComponent* r = w.GetRigidbody(e);
                                        return r != nullptr ? &r->mass : nullptr;
                                    });
+                    if (ImGui::Button("Remove Rigidbody")) {
+                        world.RemoveRigidbody(selectedEntity);
+                    }
                 }
+            }
+
+            // Add Component (post-Editor-E8, "make everything the Editor shows
+            // manageable") -- only offers a component type the entity doesn't already
+            // have. Not pushed onto undoStack, same accepted-gap reasoning as Create/
+            // Delete Entity above (editor/README.md has the full note). Material isn't
+            // listed here -- it's a property of MeshComponent (materialGuid), not its own
+            // ECS component, so it's assigned from the Mesh section above instead (only
+            // meaningful once an entity already has a Mesh to attach it to).
+            if (!world.HasMesh(selectedEntity) || !world.HasCollider(selectedEntity) ||
+                !world.HasRigidbody(selectedEntity)) {
+                ImGui::Separator();
+                ImGui::TextUnformatted("Add Component:");
+                bool anyAddComponentButton = false;
+                auto addComponentButton = [&](const char* label, bool alreadyHasComponent,
+                                              const std::function<void()>& onClick) {
+                    if (alreadyHasComponent) {
+                        return;
+                    }
+                    if (anyAddComponentButton) {
+                        ImGui::SameLine();
+                    }
+                    if (ImGui::Button(label)) {
+                        onClick();
+                    }
+                    anyAddComponentButton = true;
+                };
+                addComponentButton("+ Mesh", world.HasMesh(selectedEntity), [&]() {
+                    engine::ecs::MeshComponent mesh;
+                    mesh.meshGuid = defaultCubeMeshGuid;
+                    mesh.boundsRadius = 0.87f;
+                    world.AddMesh(selectedEntity, mesh);
+                });
+                addComponentButton("+ Collider", world.HasCollider(selectedEntity),
+                                   [&]() { world.AddCollider(selectedEntity); });
+                addComponentButton("+ Rigidbody", world.HasRigidbody(selectedEntity),
+                                   [&]() { world.AddRigidbody(selectedEntity); });
             }
         } else {
             ImGui::TextUnformatted("No entity selected -- click one in the Hierarchy panel.");

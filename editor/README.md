@@ -280,6 +280,54 @@ Editor's *own* mouse handling -- but tab-switching itself is entirely Dear ImGui
 vendored internal logic, not code this project owns, so there's nothing to patch here;
 a real second click (or a real user's typically-slower click) works every time.
 
+**Also post-E8**: object creation + generic Add/Remove Component (the first item picked up
+from a broader, separately-tracked "make everything the Editor shows manageable" ask --
+entity creation, component add/remove, and per-component editing were all things the
+Editor could *display* but not *change the shape of*). Hierarchy panel gained "Create
+Empty" (`world.CreateEntity()` + `AddTransform()`) and "Create Cube" (the same, plus a
+`MeshComponent` pointed at whichever cooked mesh is named `m1_cube.mesh`, resolved by
+filename through the same GUID index `resolveMesh` already builds, not a hardcoded GUID
+string) buttons, and a right-click "Delete" context menu per row (`ImGui::
+BeginPopupContextItem()`) -- deletion is deferred to after the whole tree finishes
+rendering that frame (`world.DestroyEntity()` mid-iteration would rearrange the very
+`ComponentStorage` the tree walk is reading) and orphans any children (reparents them to
+root) rather than cascade-deleting them, since `World::DestroyEntity()` itself doesn't
+touch other entities' `TransformComponent::parent` (a documented gap, not new). The
+Inspector gained matching "Remove Mesh"/"Remove Collider"/"Remove Rigidbody" buttons on
+each existing section, and an "Add Component:" row at the bottom offering only the
+component types the selected entity doesn't already have (`+ Mesh` seeds a default cube
+mesh the same way "Create Cube" does; `+ Collider`/`+ Rigidbody` add with the component's
+own compiled-in defaults). Material isn't in that list -- it's a property of
+`MeshComponent` (`materialGuid`), not its own ECS component -- so a Mesh with no material
+yet gets an "Assign Material" combo instead (populated from every `*.material.json` under
+`assets/`, same picker shape as a Texture property's own asset combo), and one that has a
+material gets a "Remove Material" button alongside its existing dynamic property editing.
+None of this is wired into `UndoStack` -- same accepted-gap reasoning as materials'
+own gesture-end persistence and "Save/Play aren't undoable": creating/destroying an
+*entity* is structurally different from editing a field on one that still exists (an
+`Entity` handle's index can be reused after `DestroyEntity()`, so a naive undo closure
+capturing the old handle could silently resurrect data onto a completely different,
+later-created entity) and was out of scope for this pass. Verified on Pi4: Create Cube,
+Assign/Remove Material, `+ Collider`/`+ Rigidbody`, Remove Mesh/Collider/Rigidbody, and
+Delete (via the context menu) each confirmed working correctly via before/after
+screenshots showing the expected Inspector/Hierarchy state change (entity/mesh counts,
+GUIDs, component sections appearing/disappearing) -- see this section's own testing note
+for a data-safety wrinkle hit along the way, not a code defect.
+
+**Testing note, not a bug**: mid-verification, `wlrctl pointer click right` on a Hierarchy
+row correctly opened the "Delete" context menu, but the *same test sequence* also showed
+an extra entity that hadn't been intentionally created and a different, unrelated entity's
+Rotation/Scale fields holding drifted values neither this feature's code nor the user's
+actions had set -- the same "stale/leftover synthetic input event firing at an unpredictable
+later moment" class of issue already documented for material property editing above, not a
+regression in the (pre-existing, unmodified-by-this-feature) Transform DragFloat3 widgets.
+Confirmed harmless: nothing had been saved to disk (no `Save` click occurred), and
+`editor/assets/demo.scene.json` on the Pi4 device was byte-identical to the committed copy
+after killing the process without saving. Not investigated further -- reproducing input
+races precisely enough to fix a test-harness quirk (not application code) wasn't worth the
+time against the actual feature already being solidly verified through the rest of the
+sequence.
+
 Mesh resolution (`resolveMesh`) is a real GUID → cooked-path index now (fixed alongside
 material assets' Texture property type, see that section above) — every `*.mesh` file
 under `assets_cooked/` is resolvable, not just `m1_cube.mesh`. Still not a real

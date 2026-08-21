@@ -14,9 +14,10 @@
 #include "engine/renderer/CookedMesh.h"
 #include "engine/renderer/CookedTexture.h"
 #include "engine/renderer/ForwardLitColorPipeline.h"
-#include "engine/renderer/ForwardLitPipeline.h"
 #include "engine/renderer/ForwardLitShadedPipeline.h"
 #include "engine/renderer/ForwardLitTexturedColorPipeline.h"
+#include "engine/renderer/ForwardVertexLitPipeline.h"
+#include "engine/renderer/ForwardVertexLitTexturedPipeline.h"
 #include "engine/renderer/MaterialData.h"
 #include "engine/rhi/RHIBuffer.h"
 #include "engine/rhi/RHIContext.h"
@@ -59,9 +60,10 @@ using engine::platform::InputSystem;
 using engine::platform::Key;
 using engine::platform::SDL2DisplayBackend;
 using engine::renderer::ForwardLitColorPipeline;
-using engine::renderer::ForwardLitPipeline;
 using engine::renderer::ForwardLitShadedPipeline;
 using engine::renderer::ForwardLitTexturedColorPipeline;
+using engine::renderer::ForwardVertexLitPipeline;
+using engine::renderer::ForwardVertexLitTexturedPipeline;
 using engine::renderer::FrameLightingData;
 using engine::renderer::GpuLight;
 using engine::renderer::kMaxLights;
@@ -77,6 +79,10 @@ using engine::script::ScriptRegistry;
 namespace {
 
 constexpr int kMaxFramesInFlight = 2;
+
+// This project's "missing material" indicator -- same reasoning/value as
+// editor/main.cpp's own kMissingMaterialColor, see that file's comment.
+constexpr glm::vec4 kMissingMaterialColor(0.62f, 0.0f, 0.85f, 1.0f);
 
 std::string ShaderPath(const char* fileName) {
     return std::string(PI_ENGINE_SHADER_DIR) + "/" + fileName;
@@ -490,15 +496,9 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    ForwardLitPipeline pipeline;
-    if (!pipeline.Init(context, renderPass, swapchain.GetExtent(),
-                        ShaderPath("m1_unlit.vert.spv").c_str(),
-                        ShaderPath("m1_unlit.frag.spv").c_str())) {
-        return EXIT_FAILURE;
-    }
-
-    // Material assets (post-Editor-E8) -- same second pipeline as editor/main.cpp's own
-    // colorPipeline, see that file's comment.
+    // Material assets (post-Editor-E8) -- same first pipeline as editor/main.cpp's own
+    // colorPipeline, see that file's comment (including why there is deliberately no
+    // `ForwardLitPipeline` instance in this file any more).
     ForwardLitColorPipeline colorPipeline;
     if (!colorPipeline.Init(context, renderPass, swapchain.GetExtent(),
                             ShaderPath("m_material_color.vert.spv").c_str(),
@@ -506,7 +506,7 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    // Material assets, "ForwardLitTexturedColor" shader (post-Editor-E8) -- same third
+    // Material assets, "ForwardLitTexturedColor" shader (post-Editor-E8) -- same second
     // pipeline as editor/main.cpp's own texturedColorPipeline, see that file's comment.
     ForwardLitTexturedColorPipeline texturedColorPipeline;
     if (!texturedColorPipeline.Init(context, renderPass, swapchain.GetExtent(),
@@ -515,12 +515,31 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    // Lighting phase A (post-Editor-E8, docs/01 section 8.3) -- same fourth pipeline as
+    // Lighting phase A (post-Editor-E8, docs/01 section 8.3) -- same third pipeline as
     // editor/main.cpp's own shadedPipeline, see that file's comment.
     ForwardLitShadedPipeline shadedPipeline;
     if (!shadedPipeline.Init(context, renderPass, swapchain.GetExtent(),
                              ShaderPath("m_forward_lit_shaded.vert.spv").c_str(),
                              ShaderPath("m_forward_lit_shaded.frag.spv").c_str())) {
+        return EXIT_FAILURE;
+    }
+
+    // The engine's default/base lit material -- same fourth pipeline as
+    // editor/main.cpp's own vertexLitPipeline, see that file's comment.
+    ForwardVertexLitPipeline vertexLitPipeline;
+    if (!vertexLitPipeline.Init(context, renderPass, swapchain.GetExtent(),
+                                ShaderPath("m_forward_vertex_lit.vert.spv").c_str(),
+                                ShaderPath("m_forward_vertex_lit.frag.spv").c_str())) {
+        return EXIT_FAILURE;
+    }
+
+    // Texture-supporting sibling of `vertexLitPipeline` -- same fifth pipeline as
+    // editor/main.cpp's own vertexLitTexturedPipeline, see that file's comment.
+    ForwardVertexLitTexturedPipeline vertexLitTexturedPipeline;
+    if (!vertexLitTexturedPipeline.Init(
+            context, renderPass, swapchain.GetExtent(),
+            ShaderPath("m_forward_vertex_lit_textured.vert.spv").c_str(),
+            ShaderPath("m_forward_vertex_lit_textured.frag.spv").c_str())) {
         return EXIT_FAILURE;
     }
 
@@ -960,43 +979,31 @@ int main(int argc, char** argv) {
             vkCmdBindIndexBuffer(cmd, gpuData.indexBuffer.GetHandle(), 0, VK_INDEX_TYPE_UINT32);
         };
 
-        // Pass 1: no material -- ForwardLitPipeline's original debug normal-color
-        // visualization (M1's exit criterion, untouched).
-        pipeline.Bind(cmd);
-        for (std::size_t i = 0; i < meshes.size(); ++i) {
-            if (meshes[i].materialGuid != engine::asset::kInvalidAssetGuid) {
-                continue;
-            }
-            std::optional<MeshDrawContext> draw = resolveMeshDraw(i);
-            if (!draw) {
-                continue;
-            }
-            bindMeshBuffers(*draw->gpuData);
-            pipeline.PushModelViewProjection(cmd, draw->mvp);
-            vkCmdDrawIndexed(cmd, draw->gpuData->indexCount, 1, 0, 0, 0);
-        }
-
-        // Pass 2: material targeting "ForwardLitColor" -- flat tint only.
+        // Pass 1: flat tint (colorPipeline) -- covers "ForwardLitColor" materials and the
+        // no-material "missing material" indicator. Same reasoning as editor/main.cpp's
+        // own Pass 1, see that file's comment.
         colorPipeline.Bind(cmd);
         for (std::size_t i = 0; i < meshes.size(); ++i) {
+            glm::vec4 tint;
             if (meshes[i].materialGuid == engine::asset::kInvalidAssetGuid) {
-                continue;
-            }
-            MaterialData* material = resolveMaterial(meshes[i].materialGuid);
-            if (material == nullptr || material->shaderName != "ForwardLitColor") {
-                continue;
+                tint = kMissingMaterialColor;
+            } else {
+                MaterialData* material = resolveMaterial(meshes[i].materialGuid);
+                if (material == nullptr || material->shaderName != "ForwardLitColor") {
+                    continue;
+                }
+                tint = material->GetColor("tintColor", glm::vec4(1.0f));
             }
             std::optional<MeshDrawContext> draw = resolveMeshDraw(i);
             if (!draw) {
                 continue;
             }
             bindMeshBuffers(*draw->gpuData);
-            const glm::vec4 tint = material->GetColor("tintColor", glm::vec4(1.0f));
             colorPipeline.PushMvpAndTint(cmd, draw->mvp, tint);
             vkCmdDrawIndexed(cmd, draw->gpuData->indexCount, 1, 0, 0, 0);
         }
 
-        // Pass 3: material targeting "ForwardLitTexturedColor" -- albedo texture * tint.
+        // Pass 2: material targeting "ForwardLitTexturedColor" -- albedo texture * tint.
         texturedColorPipeline.Bind(cmd);
         for (std::size_t i = 0; i < meshes.size(); ++i) {
             if (meshes[i].materialGuid == engine::asset::kInvalidAssetGuid) {
@@ -1023,8 +1030,8 @@ int main(int argc, char** argv) {
             vkCmdDrawIndexed(cmd, draw->gpuData->indexCount, 1, 0, 0, 0);
         }
 
-        // Pass 4: material targeting "ForwardLitShaded" -- lit (Blinn-Phong, lighting
-        // phase A). Same reasoning as editor/main.cpp's own Pass 4.
+        // Pass 3: material targeting "ForwardLitShaded" -- lit, per-fragment Blinn-Phong
+        // (lighting phase A). Same reasoning as editor/main.cpp's own Pass 3.
         shadedPipeline.Bind(cmd);
         shadedPipeline.BindFrameDescriptorSet(cmd, frameLightingDescriptorSets[currentFrame]);
         for (std::size_t i = 0; i < meshes.size(); ++i) {
@@ -1046,6 +1053,66 @@ int main(int argc, char** argv) {
             const glm::mat4 model = world.GetWorldMatrix(meshEntities[i]);
             const glm::vec4 tint = material->GetColor("tintColor", glm::vec4(1.0f));
             shadedPipeline.PushModelAndTint(cmd, model, tint);
+            vkCmdDrawIndexed(cmd, gpuData->indexCount, 1, 0, 0, 0);
+        }
+
+        // Pass 4: material targeting "ForwardVertexLit" -- the engine's default/base lit
+        // material, per-vertex lighting. Same reasoning as editor/main.cpp's own Pass 4.
+        vertexLitPipeline.Bind(cmd);
+        for (std::size_t i = 0; i < meshes.size(); ++i) {
+            if (meshes[i].materialGuid == engine::asset::kInvalidAssetGuid) {
+                continue;
+            }
+            MaterialData* material = resolveMaterial(meshes[i].materialGuid);
+            if (material == nullptr || material->shaderName != "ForwardVertexLit") {
+                continue;
+            }
+            if (world.GetTransform(meshEntities[i]) == nullptr) {
+                continue;
+            }
+            MeshGpuData* gpuData = resolveMesh(meshes[i].meshGuid);
+            if (gpuData == nullptr) {
+                continue;
+            }
+            bindMeshBuffers(*gpuData);
+            vertexLitPipeline.BindFrameDescriptorSet(cmd, frameLightingDescriptorSets[currentFrame]);
+            const glm::mat4 model = world.GetWorldMatrix(meshEntities[i]);
+            const glm::vec4 tint = material->GetColor("tintColor", glm::vec4(1.0f));
+            vertexLitPipeline.PushModelAndTint(cmd, model, tint);
+            vkCmdDrawIndexed(cmd, gpuData->indexCount, 1, 0, 0, 0);
+        }
+
+        // Pass 5: material targeting "ForwardVertexLitTextured" -- texture-supporting
+        // sibling of Pass 4. Same reasoning as editor/main.cpp's own Pass 5.
+        vertexLitTexturedPipeline.Bind(cmd);
+        for (std::size_t i = 0; i < meshes.size(); ++i) {
+            if (meshes[i].materialGuid == engine::asset::kInvalidAssetGuid) {
+                continue;
+            }
+            MaterialData* material = resolveMaterial(meshes[i].materialGuid);
+            if (material == nullptr || material->shaderName != "ForwardVertexLitTextured") {
+                continue;
+            }
+            const AssetGuid textureGuid =
+                material->GetTexture("albedoTexture", engine::asset::kInvalidAssetGuid);
+            auto* textureGpuData = resolveMaterialTexture(textureGuid);
+            if (textureGpuData == nullptr) {
+                continue;
+            }
+            if (world.GetTransform(meshEntities[i]) == nullptr) {
+                continue;
+            }
+            MeshGpuData* gpuData = resolveMesh(meshes[i].meshGuid);
+            if (gpuData == nullptr) {
+                continue;
+            }
+            bindMeshBuffers(*gpuData);
+            vertexLitTexturedPipeline.BindFrameDescriptorSet(cmd,
+                                                              frameLightingDescriptorSets[currentFrame]);
+            vertexLitTexturedPipeline.BindMaterialDescriptorSet(cmd, textureGpuData->descriptorSet);
+            const glm::mat4 model = world.GetWorldMatrix(meshEntities[i]);
+            const glm::vec4 tint = material->GetColor("tintColor", glm::vec4(1.0f));
+            vertexLitTexturedPipeline.PushModelAndTint(cmd, model, tint);
             vkCmdDrawIndexed(cmd, gpuData->indexCount, 1, 0, 0, 0);
         }
 
@@ -1133,10 +1200,11 @@ int main(int argc, char** argv) {
         vkDestroyFramebuffer(device, framebuffer, nullptr);
     }
     overlay.Shutdown();
-    pipeline.Shutdown();
     colorPipeline.Shutdown();
     texturedColorPipeline.Shutdown();
     shadedPipeline.Shutdown();
+    vertexLitPipeline.Shutdown();
+    vertexLitTexturedPipeline.Shutdown();
     destroyDepthResources();
     vkDestroyRenderPass(device, renderPass, nullptr);
 

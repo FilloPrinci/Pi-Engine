@@ -152,10 +152,42 @@ bool RHIPipeline::Init(RHIContext& context, const RHIPipelineDesc& desc) {
         }
     }
 
+    // Second descriptor set (set = 1) -- see RHIPipelineDesc::secondDescriptorSetLayoutBindings'
+    // own comment. Only ever created alongside set 0 above (no pipeline in this codebase
+    // needs set 1 without set 0).
+    if (!desc.secondDescriptorSetLayoutBindings.empty()) {
+        VkDescriptorSetLayoutCreateInfo secondSetLayoutInfo{};
+        secondSetLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        secondSetLayoutInfo.bindingCount =
+            static_cast<std::uint32_t>(desc.secondDescriptorSetLayoutBindings.size());
+        secondSetLayoutInfo.pBindings = desc.secondDescriptorSetLayoutBindings.data();
+
+        if (vkCreateDescriptorSetLayout(device, &secondSetLayoutInfo, nullptr,
+                                         &m_secondDescriptorSetLayout) != VK_SUCCESS) {
+            std::fprintf(stderr, "RHIPipeline: vkCreateDescriptorSetLayout (second set) failed\n");
+            if (m_descriptorSetLayout != VK_NULL_HANDLE) {
+                vkDestroyDescriptorSetLayout(device, m_descriptorSetLayout, nullptr);
+                m_descriptorSetLayout = VK_NULL_HANDLE;
+            }
+            vkDestroyShaderModule(device, vertModule, nullptr);
+            vkDestroyShaderModule(device, fragModule, nullptr);
+            return false;
+        }
+    }
+
+    VkDescriptorSetLayout setLayouts[2] = {m_descriptorSetLayout, m_secondDescriptorSetLayout};
+    std::uint32_t setLayoutCount = 0;
+    if (m_descriptorSetLayout != VK_NULL_HANDLE) {
+        ++setLayoutCount;
+        if (m_secondDescriptorSetLayout != VK_NULL_HANDLE) {
+            ++setLayoutCount;
+        }
+    }
+
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = m_descriptorSetLayout != VK_NULL_HANDLE ? 1 : 0;
-    layoutInfo.pSetLayouts = &m_descriptorSetLayout;
+    layoutInfo.setLayoutCount = setLayoutCount;
+    layoutInfo.pSetLayouts = setLayouts;
     layoutInfo.pushConstantRangeCount = static_cast<std::uint32_t>(desc.pushConstantRanges.size());
     layoutInfo.pPushConstantRanges = desc.pushConstantRanges.data();
 
@@ -164,6 +196,10 @@ bool RHIPipeline::Init(RHIContext& context, const RHIPipelineDesc& desc) {
         if (m_descriptorSetLayout != VK_NULL_HANDLE) {
             vkDestroyDescriptorSetLayout(device, m_descriptorSetLayout, nullptr);
             m_descriptorSetLayout = VK_NULL_HANDLE;
+        }
+        if (m_secondDescriptorSetLayout != VK_NULL_HANDLE) {
+            vkDestroyDescriptorSetLayout(device, m_secondDescriptorSetLayout, nullptr);
+            m_secondDescriptorSetLayout = VK_NULL_HANDLE;
         }
         vkDestroyShaderModule(device, vertModule, nullptr);
         vkDestroyShaderModule(device, fragModule, nullptr);
@@ -200,6 +236,10 @@ bool RHIPipeline::Init(RHIContext& context, const RHIPipelineDesc& desc) {
             vkDestroyDescriptorSetLayout(device, m_descriptorSetLayout, nullptr);
             m_descriptorSetLayout = VK_NULL_HANDLE;
         }
+        if (m_secondDescriptorSetLayout != VK_NULL_HANDLE) {
+            vkDestroyDescriptorSetLayout(device, m_secondDescriptorSetLayout, nullptr);
+            m_secondDescriptorSetLayout = VK_NULL_HANDLE;
+        }
         return false;
     }
 
@@ -222,6 +262,10 @@ void RHIPipeline::Shutdown() {
     if (m_descriptorSetLayout != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(device, m_descriptorSetLayout, nullptr);
         m_descriptorSetLayout = VK_NULL_HANDLE;
+    }
+    if (m_secondDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, m_secondDescriptorSetLayout, nullptr);
+        m_secondDescriptorSetLayout = VK_NULL_HANDLE;
     }
     m_context = nullptr;
 }

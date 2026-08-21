@@ -93,6 +93,18 @@ read from the previous one. No shadows yet (a static-only shadow map — baked o
 every frame, for lights/geometry that don't move — is a planned follow-up, consistent with
 this profile's own "prefer baked shadows over real-time shadow maps" design).
 
+**Default material + a "missing material" indicator**: two more changes on top of the
+above. An entity with no material assigned now renders as a flat, unmistakable
+purple/violet in both Editor executables — instead of the debug normal-color visualization
+it used to fall back to — an intentional "you forgot to assign a material" signal (the
+underlying `ForwardLitPipeline` pipeline itself is untouched, still what every M0-M7
+sample uses directly). And the engine's default/base lit material is now a *vertex*-lit
+one (`ForwardVertexLitPipeline`/`ForwardVertexLitTexturedPipeline`, sixth and seventh
+concrete pipelines) — the same lighting formula `ForwardLitShadedPipeline` already
+computes per fragment, evaluated once per vertex instead (cheaper on Pi4's TBDR GPU,
+docs/01 section 8.3's own "vertex lighting or minimal Blinn-Phong" wording), optionally
+textured, falling back to the material's own tint as albedo when no texture is assigned.
+
 ## Prerequisites
 
 - CMake ≥ 3.24, Ninja (Linux/macOS) or Visual Studio 2022 (Windows).

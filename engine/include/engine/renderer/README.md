@@ -67,10 +67,14 @@
   uber-shader with branching) -- same `Vertex` layout and MVP push constant as
   `ForwardLitPipeline`, plus a `vec4 tintColor` in the same combined push-constant range
   (`PushMvpAndTint()`, one call instead of two, since both change together every draw). No
-  lighting math (this engine is still unlit-only everywhere), no descriptor sets -- an
-  entity with no material assigned keeps rendering through the original
-  `ForwardLitPipeline` exactly as before, completely unaffected. Backs
-  `ShaderPropertySchema.h`'s `"ForwardLitColor"` entry.
+  lighting math (this engine is still unlit-only everywhere), no descriptor sets. Backs
+  `ShaderPropertySchema.h`'s `"ForwardLitColor"` entry -- and, in the Editor executables
+  only (`editor/main.cpp`/`editor/play_main.cpp`), also draws entities with *no* material
+  assigned at all, using a hardcoded purple/violet tint instead of one read from a
+  `MaterialData` (this project's "missing material" indicator, the user's own explicit
+  request -- replaces what used to fall back to `ForwardLitPipeline`'s debug normal-color
+  visualization there; `ForwardLitPipeline` itself is untouched, still used directly by
+  every M0-M7 sample with no material system involved).
 - `ForwardLitTexturedColorPipeline.h` + `.cpp` -- done (post-Editor-E8, added when material
   property editing grew to cover the Texture property type): a fourth separate concrete
   pipeline class -- `ForwardLitTexturedPipeline`'s single combined-image-sampler
@@ -98,6 +102,31 @@
   non-uniform) scale on lit entities -- world-space normals are `mat3(model) * normal`
   directly, skipping the inverse-transpose correction non-uniform scale would need, a
   documented phase-A simplification.
+- `ForwardVertexLitPipeline.h` + `.cpp` -- done (lighting phase A follow-up, the user's own
+  explicit request: the engine's default/base lit material). A sixth separate concrete
+  pipeline class -- identical lighting formula and `FrameLightingData` UBO binding shape as
+  `ForwardLitShadedPipeline`, but evaluated once per *vertex* (Gouraud shading) and
+  interpolated across the triangle, instead of once per fragment -- cheaper on Pi4's
+  fill-heavy TBDR GPU, the intended trade-off for the material every low-poly mesh is meant
+  to use by default. Its set-0 binding is identically defined to
+  `ForwardLitShadedPipeline`'s own, so callers can bind the exact same already-allocated
+  `VkDescriptorSet` into either pipeline's layout (Vulkan spec 14.2.2) -- no second
+  allocation needed. Backs `ShaderPropertySchema.h`'s `"ForwardVertexLit"` entry.
+- `ForwardVertexLitTexturedPipeline.h` + `.cpp` -- done alongside `ForwardVertexLitPipeline`
+  above: a seventh separate concrete pipeline class, texture-supporting sibling of it (same
+  split `ForwardLitColorPipeline`/`ForwardLitTexturedColorPipeline` already established).
+  The first pipeline in this codebase needing *two* independently-bound descriptor sets --
+  `RHIPipeline` grew `RHIPipelineDesc::secondDescriptorSetLayoutBindings` (set = 1) for
+  this, alongside the existing single-set support (set = 0, unchanged for every earlier
+  pipeline). Set 0 is the shared per-frame lighting UBO (same binding shape as
+  `ForwardLitShadedPipeline`/`ForwardVertexLitPipeline`, so it's shareable the same way);
+  set 1 reuses `ForwardLitTexturedColorPipeline`'s own single combined-image-sampler
+  binding shape, so a material's already-cached texture `VkDescriptorSet` is directly
+  reusable here too, no second texture cache needed. Backs `ShaderPropertySchema.h`'s
+  `"ForwardVertexLitTextured"` entry -- when no texture is assigned, a material should
+  target `"ForwardVertexLit"` instead rather than leaving `albedoTexture` empty (same
+  "switch shaderName, don't toggle a flag" convention every texture/no-texture shader pair
+  in this registry follows).
 
-Five concrete pipeline classes so far, never an uber-shader with branching (CLAUDE.md
+Seven concrete pipeline classes so far, never an uber-shader with branching (CLAUDE.md
 rule 7).

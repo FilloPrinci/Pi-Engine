@@ -223,7 +223,10 @@ dispatch layer, see that header's own comment). `engine::ecs::MeshComponent` gai
 JSON gained a matching `"material": {"guid": "..."}` block, parsed/written by
 `SceneDocument.cpp` the same shape as the existing `"mesh"` block. Both `editor/main.cpp`
 and `editor/play_main.cpp` render in three passes per frame -- no material -> the original
-`ForwardLitPipeline` (M1's debug normal-color visualization, completely unaffected);
+`ForwardLitPipeline` (M1's debug normal-color visualization, completely unaffected --
+**superseded by the lighting phase A follow-up further down**, which changed the
+no-material case to a flat purple indicator instead, still without touching
+`ForwardLitPipeline` itself);
 `"ForwardLitColor"` -> `ForwardLitColorPipeline`; `"ForwardLitTexturedColor"` ->
 `ForwardLitTexturedColorPipeline`, which needed real `RHITexture`/descriptor-set plumbing
 added to both Editor executables (a GUID -> cooked-`.tex` resolver + a fixed-size
@@ -388,6 +391,39 @@ not in this phase: shadows of any kind (a static-only shadow map -- rendered onc
 static-flagged lights/geometry, not every frame, per docs/01's own "preferably baked"
 shadow guidance -- is phase B, not started) and non-uniform-scale-correct normal
 transforms (a documented simplification, `ForwardLitShadedPipeline.h`'s own comment).
+
+**Lighting phase A follow-up, the user's own explicit request**: two changes on top of the
+material system, both about what an entity looks like *by default*. First, an entity with
+no material assigned no longer renders through `ForwardLitPipeline`'s debug normal-color
+visualization in either Editor executable -- it now renders a flat, unmistakable
+purple/violet (`kMissingMaterialColor`) through `ForwardLitColorPipeline` instead, this
+project's "missing material" indicator (same reasoning as Unity/Source's own magenta/pink
+missing-shader colors). `ForwardLitPipeline` itself is untouched -- still M1's own exit
+criterion, still used directly by every M0-M7 sample with no material system involved at
+all; only the Editor's own dispatch choice changed. Second, the engine's default/base lit
+material is now `"ForwardVertexLit"`/`"ForwardVertexLitTextured"` (`ShaderPropertySchema.h`)
+-- the sixth and seventh concrete pipeline classes, `ForwardVertexLitPipeline`/
+`ForwardVertexLitTexturedPipeline`: the identical lighting formula and `FrameLightingData`
+UBO `ForwardLitShadedPipeline` already reads, but evaluated once per *vertex* (Gouraud
+shading) instead of once per fragment -- cheaper on Pi4's fill-heavy TBDR GPU, matching
+docs/01 section 8.3's own "vertex lighting or minimal Blinn-Phong" wording (the fragment
+half already existed; this is the vertex half). The textured variant needed `RHIPipeline`
+to support a *second*, independent descriptor set (set = 1, alongside the per-frame
+lighting UBO's set = 0) -- the first pipeline in this codebase needing two independently-
+bound resources with different lifetimes; both new sets' binding shapes are identical to
+already-existing ones (`ForwardLitShadedPipeline`'s set 0, `ForwardLitTexturedColorPipeline`'s
+texture set), so both Editor executables reuse their *existing* frame-lighting descriptor
+sets and material-texture cache unchanged (Vulkan spec 14.2.2, "identically defined"
+descriptor set layouts) -- no new pool/cache/allocation needed. When a material has no
+texture, it targets `"ForwardVertexLit"` instead of leaving `albedoTexture` empty on
+`"ForwardVertexLitTextured"` -- same "switch shaderName, don't toggle a flag" convention
+every texture/no-texture shader pair in this registry follows. `editor/assets/
+demo.scene.json`: the ground plane, the RotateScript cube, and the falling physics box are
+now *deliberately* left without a material (proving the purple indicator); the second
+plain cube references a new `assets/m_demo_vertex_lit.material.json` (green tint); a new
+final entity (`assets/m7_quad.gltf`'s mesh, same reason `m_demo_checker_tint` uses it)
+references a new `assets/m_demo_vertex_lit_textured.material.json` (the same checker
+texture, warm tint) -- all seven concrete pipelines now visible side by side in one scene.
 
 Mesh resolution (`resolveMesh`) is a real GUID → cooked-path index now (fixed alongside
 material assets' Texture property type, see that section above) — every `*.mesh` file

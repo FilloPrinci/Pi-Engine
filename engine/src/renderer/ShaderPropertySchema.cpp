@@ -32,6 +32,31 @@ const std::vector<MaterialShaderInfo>& GetMaterialShaderRegistry() {
                 {"tintColor", ShaderPropertyType::Color, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), 0.0f},
             },
         },
+        {
+            // The engine's default/base lit material (the user's own explicit request) --
+            // same lighting formula and same "tintColor" role as ForwardLitShaded, just
+            // evaluated per-vertex instead of per-fragment (ForwardVertexLitPipeline.h's
+            // own comment). Flat tint only, no texture -- see
+            // "ForwardVertexLitTextured" below for the texture-supporting sibling.
+            "ForwardVertexLit",
+            {
+                {"tintColor", ShaderPropertyType::Color, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), 0.0f},
+            },
+        },
+        {
+            // Texture-supporting sibling of "ForwardVertexLit" above -- same split
+            // ForwardLitColor/ForwardLitTexturedColor already established. When
+            // "albedoTexture" isn't assigned, the material should target
+            // "ForwardVertexLit" instead rather than leaving this property empty (same
+            // "switch shaderName, don't toggle a flag" convention every other
+            // texture/no-texture shader pair in this registry already follows).
+            "ForwardVertexLitTextured",
+            {
+                {"tintColor", ShaderPropertyType::Color, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), 0.0f},
+                {"albedoTexture", ShaderPropertyType::Texture, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f),
+                 0.0f},
+            },
+        },
     };
     return registry;
 }

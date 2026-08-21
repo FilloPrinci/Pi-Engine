@@ -134,3 +134,18 @@ TEST_CASE("GetMaterialShaderRegistry knows ForwardLitColor and ForwardLitTexture
 TEST_CASE("FindMaterialShader returns nullptr for an unregistered shader name") {
     CHECK(FindMaterialShader("SomeShaderThatDoesNotExist") == nullptr);
 }
+
+TEST_CASE("GetMaterialShaderRegistry knows ForwardVertexLit and ForwardVertexLitTextured") {
+    const auto* vertexLit = FindMaterialShader("ForwardVertexLit");
+    REQUIRE(vertexLit != nullptr);
+    REQUIRE(vertexLit->properties.size() == 1);
+    CHECK(vertexLit->properties[0].name == "tintColor");
+    CHECK(vertexLit->properties[0].type == ShaderPropertyType::Color);
+
+    const auto* vertexLitTextured = FindMaterialShader("ForwardVertexLitTextured");
+    REQUIRE(vertexLitTextured != nullptr);
+    REQUIRE(vertexLitTextured->properties.size() == 2);
+    CHECK(vertexLitTextured->properties[0].name == "tintColor");
+    CHECK(vertexLitTextured->properties[1].name == "albedoTexture");
+    CHECK(vertexLitTextured->properties[1].type == ShaderPropertyType::Texture);
+}

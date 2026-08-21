@@ -69,6 +69,8 @@ add_library(engine_core STATIC
     src/renderer/ForwardLitShadedPipeline.cpp
     src/renderer/ForwardLitTexturedPipeline.cpp
     src/renderer/ForwardLitTexturedColorPipeline.cpp
+    src/renderer/ForwardVertexLitPipeline.cpp
+    src/renderer/ForwardVertexLitTexturedPipeline.cpp
     src/renderer/FrustumCuller.cpp
     src/renderer/MaterialData.cpp
     src/renderer/MeshLoader.cpp

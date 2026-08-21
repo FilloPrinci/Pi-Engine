@@ -1,0 +1,7 @@
+{
+  "_comment": "Demo material asset (the engine's default/base lit material, the user's own explicit request) -- targets the \"ForwardVertexLit\" shader (ShaderPropertySchema.h), same lighting formula as m_demo_lit_white.material.json's own \"ForwardLitShaded\" but evaluated per-vertex instead of per-fragment (ForwardVertexLitPipeline.h's own comment). A grassy green tint (unlike m_demo_lit_white's deliberately near-white one) so this entity's own tintColor is clearly part of what's visible, not just the lights. Referenced by editor/assets/demo.scene.json's second entity (the static cube at [-2, 0.5, 0]), which used to have no material at all and would now render as this engine's flat-purple \"missing material\" indicator (kMissingMaterialColor, editor/main.cpp) if left unassigned.",
+  "shader": "ForwardVertexLit",
+  "properties": {
+    "tintColor": [0.4, 0.75, 0.35, 1.0]
+  }
+}

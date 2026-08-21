@@ -25,6 +25,15 @@ struct RHIPipelineDesc {
     // (ForwardLitTexturedPipeline) fills this with its combined-image-sampler binding(s);
     // RHIPipeline builds and owns the resulting single VkDescriptorSetLayout (set = 0).
     std::vector<VkDescriptorSetLayoutBinding> descriptorSetLayoutBindings;
+    // Optional second descriptor set (set = 1) -- for a pipeline that needs two
+    // independently-bound resources with different lifetimes, e.g.
+    // ForwardVertexLitTexturedPipeline's per-frame lighting UBO at set = 0 (bound once per
+    // pass) plus a per-material texture at set = 1 (rebound per draw). Empty (the default)
+    // for every pipeline that needs at most one bound-resource kind -- still the common
+    // case. Only meaningful when `descriptorSetLayoutBindings` above is also non-empty
+    // (Vulkan requires no gap at set index 0); no pipeline in this codebase needs set = 1
+    // without set = 0 too, so that combination isn't handled.
+    std::vector<VkDescriptorSetLayoutBinding> secondDescriptorSetLayoutBindings;
     VkRenderPass renderPass = VK_NULL_HANDLE;
     VkExtent2D viewportExtent{};
     VkCullModeFlags cullMode = VK_CULL_MODE_NONE;
@@ -48,12 +57,15 @@ public:
     VkPipelineLayout GetLayout() const { return m_layout; }
     // VK_NULL_HANDLE if `desc.descriptorSetLayoutBindings` was empty.
     VkDescriptorSetLayout GetDescriptorSetLayout() const { return m_descriptorSetLayout; }
+    // VK_NULL_HANDLE if `desc.secondDescriptorSetLayoutBindings` was empty.
+    VkDescriptorSetLayout GetSecondDescriptorSetLayout() const { return m_secondDescriptorSetLayout; }
 
 private:
     RHIContext* m_context = nullptr;
     VkPipeline m_pipeline = VK_NULL_HANDLE;
     VkPipelineLayout m_layout = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_secondDescriptorSetLayout = VK_NULL_HANDLE;
 };
 
 } // namespace engine::rhi

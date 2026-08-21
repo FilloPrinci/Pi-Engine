@@ -38,8 +38,16 @@ bool RHIBuffer::InitWithData(RHIContext& context, VkBufferUsageFlags usage, cons
         return false;
     }
 
-    std::memcpy(resultInfo.pMappedData, data, sizeBytes);
+    m_mappedData = resultInfo.pMappedData;
+    std::memcpy(m_mappedData, data, sizeBytes);
     return true;
+}
+
+void RHIBuffer::UpdateData(const void* data, std::size_t sizeBytes) {
+    // No bounds check against the original allocation size here -- same "trust the
+    // caller" precedent as InitWithData() itself; a caller that overruns has a real bug
+    // to fix at the call site, not something to degrade around at this layer.
+    std::memcpy(m_mappedData, data, sizeBytes);
 }
 
 void RHIBuffer::Shutdown() {
@@ -47,6 +55,7 @@ void RHIBuffer::Shutdown() {
         vmaDestroyBuffer(m_context->GetAllocator(), m_buffer, m_allocation);
         m_buffer = VK_NULL_HANDLE;
         m_allocation = VK_NULL_HANDLE;
+        m_mappedData = nullptr;
     }
     m_context = nullptr;
 }

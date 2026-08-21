@@ -7,6 +7,13 @@ Thin Vulkan wrapper (docs/01 section 4, module 1) -- not a full multi-backend ab
 - `RHISwapchain.h` + `.cpp` -- done (M0): swapchain + image views, recreatable in place.
 - `RHIBuffer.h` + `.cpp` -- done (M1): vertex/index buffers via VMA, direct mapped upload
   (no staging buffer -- Pi4/Pi5 have no dedicated VRAM, see the header's comment).
+  `UpdateData()` (lighting phase A, docs/01 section 8.3) added the first write-more-than-
+  once path -- every earlier use was InitWithData() once at load time; a per-frame UBO
+  (`renderer::FrameLightingData`) needed a way to overwrite an already-initialized
+  buffer's contents in place. Safe to call every frame since the allocation is always
+  persistently host-mapped already; synchronization against a still-in-flight GPU read is
+  the *caller's* job (one buffer per frame-in-flight, not one shared instance -- see
+  `renderer/ForwardLitShadedPipeline.h`'s own comment).
 - `RHIPipeline.h` + `.cpp` -- done (M1, extended M7): graphics pipeline creation wrapper,
   shared by concrete pipeline classes (`renderer/ForwardLitPipeline`,
   `renderer/ForwardLitTexturedPipeline`). M7 (textures step) added optional descriptor

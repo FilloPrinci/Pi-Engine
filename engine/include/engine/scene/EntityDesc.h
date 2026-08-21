@@ -2,6 +2,7 @@
 
 #include "engine/asset/AssetGuid.h"
 #include "engine/ecs/components/ColliderComponent.h"
+#include "engine/ecs/components/LightComponent.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -18,8 +19,9 @@ namespace engine::scene {
 // Prefab -- never needs the JSON library on its include path, the same reasoning
 // physics/PhysicsWorld.h stays Jolt-free.
 //
-// v1 scope (docs/01 section 12.2, 13.4): Transform + Mesh (by GUID) + Collider +
-// Rigidbody + Scripts (by name only). `scriptNames` follows the exact same reasoning
+// v1 scope (docs/01 section 12.2, 13.4): Transform + Mesh (by GUID) + Material (by GUID,
+// post-Editor-E8) + Collider + Rigidbody + Light (lighting phase A, docs/01 section 8.3) +
+// Scripts (by name only). `scriptNames` follows the exact same reasoning
 // `CreatePhysicsBodyFn` already established for Rigidbody -- SpawnEntities() takes an
 // optional `AttachScriptFn` callback (SceneDocument.h) instead of depending on
 // engine::script directly, so engine/scene/ still never needs to include a single
@@ -55,6 +57,16 @@ struct EntityDesc {
     bool hasRigidbody = false;
     bool rigidbodyIsStatic = true;
     float rigidbodyMass = 1.0f;
+
+    // Lighting phase A (docs/01 section 8.3) -- same shape as every other optional block
+    // above (own has-flag). Field names/defaults mirror ecs::LightComponent directly.
+    bool hasLight = false;
+    ecs::LightComponent::Type lightType = ecs::LightComponent::Type::Directional;
+    glm::vec3 lightColor = glm::vec3(1.0f, 1.0f, 1.0f);
+    float lightIntensity = 1.0f;
+    float lightRange = 10.0f;
+    bool lightIsStatic = false;
+    bool lightCastsShadow = false;
 
     // Script type names (REGISTER_SCRIPT's own name, e.g. "RotateScript") to attach, in
     // order. Whatever loads this scene must have each named script's class actually

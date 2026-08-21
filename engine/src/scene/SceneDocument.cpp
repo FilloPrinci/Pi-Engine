@@ -84,6 +84,19 @@ EntityDesc ParseEntity(const nlohmann::json& json) {
         desc.rigidbodyMass = rigidbody.value("mass", desc.rigidbodyMass);
     }
 
+    if (json.contains("light")) {
+        const auto& light = json.at("light");
+        desc.hasLight = true;
+        const std::string type = light.value("type", std::string("directional"));
+        desc.lightType = (type == "point") ? ecs::LightComponent::Type::Point
+                                            : ecs::LightComponent::Type::Directional;
+        desc.lightColor = ReadVec3(light, "color", desc.lightColor);
+        desc.lightIntensity = light.value("intensity", desc.lightIntensity);
+        desc.lightRange = light.value("range", desc.lightRange);
+        desc.lightIsStatic = light.value("isStatic", desc.lightIsStatic);
+        desc.lightCastsShadow = light.value("castsShadow", desc.lightCastsShadow);
+    }
+
     if (json.contains("scripts")) {
         const auto& scripts = json.at("scripts");
         if (scripts.is_array()) {
@@ -148,6 +161,18 @@ nlohmann::json WriteEntity(const EntityDesc& desc) {
         rigidbody["isStatic"] = desc.rigidbodyIsStatic;
         rigidbody["mass"] = desc.rigidbodyMass;
         entityJson["rigidbody"] = rigidbody;
+    }
+
+    if (desc.hasLight) {
+        nlohmann::json light;
+        light["type"] =
+            desc.lightType == ecs::LightComponent::Type::Point ? "point" : "directional";
+        light["color"] = WriteVec3(desc.lightColor);
+        light["intensity"] = desc.lightIntensity;
+        light["range"] = desc.lightRange;
+        light["isStatic"] = desc.lightIsStatic;
+        light["castsShadow"] = desc.lightCastsShadow;
+        entityJson["light"] = light;
     }
 
     if (!desc.scriptNames.empty()) {
@@ -282,6 +307,16 @@ std::vector<EntityDesc> ExtractEntityDescs(const ecs::World& world) {
             desc.rigidbodyMass = rigidbody->mass;
         }
 
+        if (const ecs::LightComponent* light = world.GetLight(entity)) {
+            desc.hasLight = true;
+            desc.lightType = light->type;
+            desc.lightColor = light->color;
+            desc.lightIntensity = light->intensity;
+            desc.lightRange = light->range;
+            desc.lightIsStatic = light->isStatic;
+            desc.lightCastsShadow = light->castsShadow;
+        }
+
         entities.push_back(desc);
     }
 
@@ -342,6 +377,17 @@ std::vector<ecs::Entity> SpawnEntities(ecs::World& world, const std::vector<Enti
             } else {
                 createPhysicsBody(world, entity, desc.rigidbodyIsStatic);
             }
+        }
+
+        if (desc.hasLight) {
+            ecs::LightComponent light;
+            light.type = desc.lightType;
+            light.color = desc.lightColor;
+            light.intensity = desc.lightIntensity;
+            light.range = desc.lightRange;
+            light.isStatic = desc.lightIsStatic;
+            light.castsShadow = desc.lightCastsShadow;
+            world.AddLight(entity, light);
         }
 
         if (!desc.scriptNames.empty() && attachScript) {

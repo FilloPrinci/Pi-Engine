@@ -81,6 +81,23 @@
   `VkDescriptorSet` are the caller's responsibility -- now `editor/main.cpp`'s/
   `editor/play_main.cpp`'s own material-texture GPU cache, not one hardcoded demo texture
   like `samples/m7_textures/main.cpp` still has).
+- `ShaderPropertySchema.h`'s registry lookup for lighting is described in
+  `ForwardLitShadedPipeline.h`'s own entry below, not repeated here.
+- `ForwardLitShadedPipeline.h` + `.cpp` -- done (lighting phase A, docs/01 section 8.3's
+  "Low-Poly Retro" profile -- not the "PBR profile" `CLAUDE.md` keeps out of scope): a
+  fifth separate concrete pipeline class, minimal Blinn-Phong (ambient + N·L diffuse + a
+  fixed-shininess specular term, no shadows yet -- a separate, not-yet-started static
+  shadow map is phase B). The first pipeline in this project bound to a UBO instead of
+  only push constants/a texture sampler: `FrameLightingData` (viewProj, camera world
+  position, ambient color, up to `kMaxLights`=4 `GpuLight` entries) is scene-wide,
+  per-frame data, not per-draw, so it doesn't fit push-constant space alongside a model
+  matrix the way every other pipeline's MVP does -- the vertex shader multiplies
+  `frame.viewProj * pc.model` itself instead of the CPU precomputing a full MVP per draw.
+  Bound once per frame (`BindFrameDescriptorSet()`), not per-entity. Backs
+  `ShaderPropertySchema.h`'s `"ForwardLitShaded"` entry. Assumes uniform (not
+  non-uniform) scale on lit entities -- world-space normals are `mat3(model) * normal`
+  directly, skipping the inverse-transpose correction non-uniform scale would need, a
+  documented phase-A simplification.
 
-Four concrete pipeline classes so far, never an uber-shader with branching (CLAUDE.md
+Five concrete pipeline classes so far, never an uber-shader with branching (CLAUDE.md
 rule 7).

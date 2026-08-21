@@ -1,0 +1,7 @@
+{
+  "_comment": "Demo material asset (lighting phase A, post-Editor-E8, docs/01 section 8.3) -- targets the \"ForwardLitShaded\" shader (ShaderPropertySchema.h), a near-white tint so the scene's directional + point lights (editor/assets/demo.scene.json) are what actually shapes the visible shading (ambient + N-dot-L diffuse + a Blinn-Phong specular highlight), not the tint color itself. Referenced by a new demo entity distinct from every other material-tinted entity in the scene, so this engine's still-unlit ForwardLitPipeline/ForwardLitColorPipeline/ForwardLitTexturedColorPipeline entities and this one genuinely lit entity are visible side by side.",
+  "shader": "ForwardLitShaded",
+  "properties": {
+    "tintColor": [0.85, 0.85, 0.85, 1.0]
+  }
+}

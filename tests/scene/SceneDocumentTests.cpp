@@ -14,6 +14,7 @@
 using engine::asset::AssetGuid;
 using engine::ecs::ColliderComponent;
 using engine::ecs::Entity;
+using engine::ecs::LightComponent;
 using engine::ecs::MeshComponent;
 using engine::ecs::RigidbodyComponent;
 using engine::ecs::TransformComponent;
@@ -444,4 +445,120 @@ TEST_CASE("ExtractEntityDescs recovers parentIndex from live TransformComponent:
     REQUIRE(extracted.size() == 2);
     CHECK(extracted[0].parentIndex == -1);
     CHECK(extracted[1].parentIndex == 0);
+}
+
+TEST_CASE("ParseSceneDocument reads a \"light\" block (Point, non-default fields)") {
+    ScopedTempFile file("scene_document_light_point.tmp.json", R"({
+        "entities": [
+            {
+                "transform": {"position": [0.0, 5.0, 0.0]},
+                "light": {"type": "point", "color": [1.0, 0.5, 0.25], "intensity": 2.0,
+                          "range": 15.0, "isStatic": true, "castsShadow": true}
+            }
+        ]
+    })");
+
+    std::vector<EntityDesc> entities;
+    REQUIRE(ParseSceneDocument(file.m_path, entities));
+    REQUIRE(entities.size() == 1);
+
+    const EntityDesc& desc = entities[0];
+    REQUIRE(desc.hasLight);
+    CHECK(desc.lightType == LightComponent::Type::Point);
+    CHECK(desc.lightColor == glm::vec3(1.0f, 0.5f, 0.25f));
+    CHECK(desc.lightIntensity == doctest::Approx(2.0f));
+    CHECK(desc.lightRange == doctest::Approx(15.0f));
+    CHECK(desc.lightIsStatic);
+    CHECK(desc.lightCastsShadow);
+}
+
+TEST_CASE("ParseSceneDocument defaults \"light\" to Directional, not static, no shadow") {
+    ScopedTempFile file("scene_document_light_directional.tmp.json", R"({
+        "entities": [
+            {"transform": {"position": [0.0, 0.0, 0.0]}, "light": {}}
+        ]
+    })");
+
+    std::vector<EntityDesc> entities;
+    REQUIRE(ParseSceneDocument(file.m_path, entities));
+    REQUIRE(entities.size() == 1);
+    REQUIRE(entities[0].hasLight);
+    CHECK(entities[0].lightType == LightComponent::Type::Directional);
+    CHECK_FALSE(entities[0].lightIsStatic);
+    CHECK_FALSE(entities[0].lightCastsShadow);
+}
+
+TEST_CASE("An entity with no \"light\" block has hasLight == false") {
+    ScopedTempFile file("scene_document_no_light.tmp.json", R"({
+        "entities": [{"transform": {"position": [0.0, 0.0, 0.0]}}]
+    })");
+
+    std::vector<EntityDesc> entities;
+    REQUIRE(ParseSceneDocument(file.m_path, entities));
+    REQUIRE(entities.size() == 1);
+    CHECK_FALSE(entities[0].hasLight);
+}
+
+TEST_CASE("SpawnEntities adds a LightComponent matching a \"light\"-bearing EntityDesc") {
+    World world;
+    std::vector<EntityDesc> descs(1);
+    descs[0].hasLight = true;
+    descs[0].lightType = LightComponent::Type::Point;
+    descs[0].lightColor = glm::vec3(0.2f, 0.4f, 0.6f);
+    descs[0].lightIntensity = 3.0f;
+    descs[0].lightRange = 8.0f;
+    descs[0].lightIsStatic = true;
+    descs[0].lightCastsShadow = true;
+
+    const std::vector<Entity> spawned = SpawnEntities(world, descs, glm::vec3(0.0f));
+    REQUIRE(spawned.size() == 1);
+    REQUIRE(world.HasLight(spawned[0]));
+    const LightComponent* light = world.GetLight(spawned[0]);
+    CHECK(light->type == LightComponent::Type::Point);
+    CHECK(light->color == glm::vec3(0.2f, 0.4f, 0.6f));
+    CHECK(light->intensity == doctest::Approx(3.0f));
+    CHECK(light->range == doctest::Approx(8.0f));
+    CHECK(light->isStatic);
+    CHECK(light->castsShadow);
+}
+
+TEST_CASE("ExtractEntityDescs/WriteSceneDocument round-trip preserves a \"light\" block") {
+    ScopedTempFile sourceFile("scene_light_extract_source.tmp.json", R"({
+        "entities": [
+            {
+                "transform": {"position": [0.0, 5.0, 0.0]},
+                "light": {"type": "point", "color": [1.0, 0.5, 0.25], "intensity": 2.0,
+                          "range": 15.0, "isStatic": true, "castsShadow": true}
+            }
+        ]
+    })");
+    World world;
+    REQUIRE(LoadScene(sourceFile.m_path, world));
+
+    const std::vector<EntityDesc> extracted = ExtractEntityDescs(world);
+    REQUIRE(extracted.size() == 1);
+
+    ScopedTempFile outputFile("scene_light_extract_output.tmp.json", "");
+    REQUIRE(WriteSceneDocument(outputFile.m_path, extracted));
+
+    std::vector<EntityDesc> reloaded;
+    REQUIRE(ParseSceneDocument(outputFile.m_path, reloaded));
+    REQUIRE(reloaded.size() == 1);
+    REQUIRE(reloaded[0].hasLight);
+    CHECK(reloaded[0].lightType == LightComponent::Type::Point);
+    CHECK(reloaded[0].lightColor == glm::vec3(1.0f, 0.5f, 0.25f));
+    CHECK(reloaded[0].lightIntensity == doctest::Approx(2.0f));
+    CHECK(reloaded[0].lightRange == doctest::Approx(15.0f));
+    CHECK(reloaded[0].lightIsStatic);
+    CHECK(reloaded[0].lightCastsShadow);
+}
+
+TEST_CASE("WriteSceneDocument omits \"light\" entirely when the entity has none") {
+    std::vector<EntityDesc> descs(1);
+    ScopedTempFile file("scene_light_omitted.tmp.json", "");
+    REQUIRE(WriteSceneDocument(file.m_path, descs));
+
+    std::ifstream in(file.m_path);
+    std::string contents((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    CHECK(contents.find("light") == std::string::npos);
 }

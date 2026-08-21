@@ -356,6 +356,39 @@ exclusion Add/Remove Component and Create/Delete Entity have -- a shape/isStatic
 change doesn't touch an `Entity` handle's lifetime the way creating or destroying one
 does, so both went straight into `undoStack` like every other Inspector field.
 
+**Also post-E8**: lighting phase A (docs/01 section 8.3's "Low-Poly Retro" profile --
+vertex/Blinn-Phong lighting, an indicative budget of 2-4 simultaneous lights; deliberately
+not the "PBR profile" `CLAUDE.md` keeps out of scope). `engine::ecs::LightComponent`
+(Directional or Point, color/intensity/range, plus `isStatic`/`castsShadow` hints reserved
+for a not-yet-built static shadow map) is a component like any other -- attach one to any
+entity with a Transform. Lighting itself is just another shader choice in the existing
+material system (`ShaderPropertySchema.h`'s `"ForwardLitShaded"` entry, backed by a new
+`ForwardLitShadedPipeline` -- a fifth separate concrete pipeline, `CLAUDE.md` rule 7 still
+honored): assign a material targeting that shader to a Mesh and it renders lit (ambient +
+N·L diffuse + a fixed-shininess specular highlight) instead of through any of the other
+four pipelines. Needed this project's first per-frame (not per-draw, not write-once)
+Uniform Buffer -- `RHIBuffer` gained an `UpdateData()` path (previously every buffer was
+written once at load time), and both Editor executables now keep one buffer + descriptor
+set *per frame-in-flight* (never a single shared instance, or writing this frame's light
+data could race a still-in-flight GPU read from the previous frame) collected fresh every
+frame from every `LightComponent` in the scene (up to `kMaxLights`=4) plus the camera's
+own view-projection matrix and world position. The Inspector gained a "Light" section
+(Type combo -- Directional/Point, pushed to `undoStack` directly like Collider's own Shape
+combo -- Color/Intensity/Range/Is Static/Casts Shadow, all `TrackFieldEdit`-tracked) and a
+`+ Light` entry in Add Component. `editor/assets/demo.scene.json` gained two light
+entities (a warm Directional "sun" and an orange Point light) plus
+`assets/m_demo_lit_white.material.json`, a near-white `ForwardLitShaded` material whose
+visible shading comes entirely from those two lights, not its own tint -- verified on Pi4:
+clearly visible per-face shading gradient and a specular highlight distinguishing it from
+every other (flat-tinted or debug-normal-colored) entity in the scene, in both the
+Editor's Scene View and Play Mode, at 59-60 FPS capped and ~192 FPS uncapped, with no
+visible flicker/corruption at either rate (the double-buffered UBO's own correctness
+signal -- a synchronization bug here would likely show up as exactly that). Deliberately
+not in this phase: shadows of any kind (a static-only shadow map -- rendered once for
+static-flagged lights/geometry, not every frame, per docs/01's own "preferably baked"
+shadow guidance -- is phase B, not started) and non-uniform-scale-correct normal
+transforms (a documented simplification, `ForwardLitShadedPipeline.h`'s own comment).
+
 Mesh resolution (`resolveMesh`) is a real GUID → cooked-path index now (fixed alongside
 material assets' Texture property type, see that section above) — every `*.mesh` file
 under `assets_cooked/` is resolvable, not just `m1_cube.mesh`. Still not a real

@@ -128,6 +128,49 @@ TEST_CASE("Add/Get/Has/Remove round-trip for RigidbodyComponent and ColliderComp
     CHECK_FALSE(world.HasCollider(entity));
 }
 
+TEST_CASE("Add/Get/Has/Remove round-trip for LightComponent") {
+    World world;
+    const Entity entity = world.CreateEntity();
+
+    engine::ecs::LightComponent light;
+    light.type = engine::ecs::LightComponent::Type::Point;
+    light.color = glm::vec3(1.0f, 0.5f, 0.25f);
+    light.intensity = 2.0f;
+    light.range = 15.0f;
+    light.isStatic = true;
+    light.castsShadow = true;
+    world.AddLight(entity, light);
+
+    REQUIRE(world.HasLight(entity));
+    CHECK(world.GetLight(entity)->type == engine::ecs::LightComponent::Type::Point);
+    CHECK(world.GetLight(entity)->color == glm::vec3(1.0f, 0.5f, 0.25f));
+    CHECK(world.GetLight(entity)->intensity == doctest::Approx(2.0f));
+    CHECK(world.GetLight(entity)->range == doctest::Approx(15.0f));
+    CHECK(world.GetLight(entity)->isStatic);
+    CHECK(world.GetLight(entity)->castsShadow);
+
+    world.RemoveLight(entity);
+    CHECK_FALSE(world.HasLight(entity));
+}
+
+TEST_CASE("LightComponent defaults to a Directional light pointing down, not static") {
+    engine::ecs::LightComponent light;
+    CHECK(light.type == engine::ecs::LightComponent::Type::Directional);
+    CHECK_FALSE(light.isStatic);
+    CHECK_FALSE(light.castsShadow);
+}
+
+TEST_CASE("DestroyEntity removes LightComponent along with every other component") {
+    World world;
+    const Entity entity = world.CreateEntity();
+    world.AddLight(entity, {});
+    REQUIRE(world.HasLight(entity));
+
+    world.DestroyEntity(entity);
+    CHECK_FALSE(world.IsAlive(entity));
+    CHECK_FALSE(world.HasLight(entity));
+}
+
 // Hierarchy (post-Editor-E8, docs/07-unity-parity-analysis.md).
 
 TEST_CASE("GetWorldMatrix returns the local matrix unchanged for a root entity") {

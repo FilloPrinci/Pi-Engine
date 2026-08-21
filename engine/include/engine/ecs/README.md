@@ -30,6 +30,19 @@
   script's call just sets a `pending*`/`hasPending*` pair that `PhysicsWorld::Step()`
   drains and applies through the real `BodyInterface` at the start of the next physics
   step, then clears (docs/01 section 9.6: "applied at the start of the next physics step").
+  `isStatic` (post-Editor-E8, "make everything the Editor shows manageable" phase 3) --
+  read once at `PhysicsWorld::CreateBody()` time (M4 scope, no runtime static/dynamic
+  toggling), but now *retained* on the live component too, closing a gap
+  `ExtractEntityDescs()` used to have (a Rigidbody's static/dynamic flag was previously
+  read-once-and-discarded, so saving a scene with one silently dropped it entirely -- see
+  `SceneDocument.h`'s own comment).
+- `components/LightComponent.h` -- done (lighting phase A, docs/01 section 8.3's "Low-Poly
+  Retro" profile). Directional or Point, color/intensity/range, plus `isStatic`/
+  `castsShadow` -- hints only in this phase (every light is re-evaluated every frame
+  regardless), reserved for a future static shadow map (phase B, not started) that bakes
+  once instead of every frame for lights/geometry flagged as never moving. See
+  `renderer/ForwardLitShadedPipeline.h`'s own comment for how a `LightComponent` becomes
+  GPU-side data each frame.
 
 Never a permanent raw pointer to a component — always `ComponentHandle<T>`
 (script/ComponentHandle.h, done M3, CLAUDE.md rule 4). M2's systems (FrustumCuller) still

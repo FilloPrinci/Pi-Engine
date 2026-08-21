@@ -61,9 +61,10 @@ step rather than one per intermediate value; and entities can now carry a materi
 (`.material.json`) whose properties are genuinely generic — a material is an instance of a
 shader, and the Inspector edits whatever properties that shader declares (a color picker
 for a tint, an asset picker for a texture reference), not just one hardcoded field — backed
-by a fixed, hand-declared property schema per shader and two concrete pipelines so far
+by a fixed, hand-declared property schema per shader and three concrete pipelines so far
 (`ForwardLitColorPipeline` for a flat tint, `ForwardLitTexturedColorPipeline` for a
-texture times a tint), with no C++ recompile needed to change how an object looks. The
+texture times a tint, `ForwardLitShadedPipeline` for real Blinn-Phong lighting — see
+below), with no C++ recompile needed to change how an object looks. The
 Editor also now uses a real docked panel layout (Hierarchy left, Inspector right,
 Assets/Console/Project Hub tabbed along the bottom, the 3D Scene view filling the middle —
 the classic Unity arrangement, built via Dear ImGui's docking support), rather than a set
@@ -77,6 +78,20 @@ Box/Sphere switch (not read-only text), and Rigidbody gained an "Is Static" chec
 backed by a real `isStatic` field on the component itself — previously read once and
 discarded, so saving a scene with a Rigidbody used to silently drop it entirely; it now
 round-trips like everything else.
+
+**Lighting**: docs/01 section 8.3's "Low-Poly Retro" profile now has a first real
+implementation — a `LightComponent` (Directional or Point, up to 4 simultaneous, matching
+that section's own indicative budget) is a component like any other, and lighting itself
+is just another material shader choice (`ForwardLitShadedPipeline`, minimal Blinn-Phong —
+ambient + diffuse + a specular highlight, deliberately not the "PBR profile" this project
+keeps out of scope). Assign a `ForwardLitShaded` material to a Mesh and it's lit by every
+`LightComponent` in the scene instead of rendering through any of the engine's other
+pipelines. This needed the project's first per-frame GPU uniform buffer (previously every
+buffer was written once at load time and never touched again) — double-buffered across
+frames-in-flight so writing this frame's light data can never race a still-in-flight GPU
+read from the previous one. No shadows yet (a static-only shadow map — baked once, not
+every frame, for lights/geometry that don't move — is a planned follow-up, consistent with
+this profile's own "prefer baked shadows over real-time shadow maps" design).
 
 ## Prerequisites
 

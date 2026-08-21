@@ -28,6 +28,7 @@ void World::DestroyEntity(Entity entity) {
                              // milestone through M4 destroys a physics entity at runtime,
                              // PhysicsWorld gains that responsibility once one does.
     RemoveCollider(entity);
+    RemoveLight(entity);
 
     EntityRecord& record = m_entityRecords[entity.index];
     record.alive = false;
@@ -71,6 +72,14 @@ void World::RemoveCollider(Entity entity) { m_colliders.Remove(entity); }
 ColliderComponent* World::GetCollider(Entity entity) { return m_colliders.Get(entity); }
 const ColliderComponent* World::GetCollider(Entity entity) const { return m_colliders.Get(entity); }
 bool World::HasCollider(Entity entity) const { return m_colliders.Has(entity); }
+
+LightComponent& World::AddLight(Entity entity, const LightComponent& value) {
+    return m_lights.Add(entity, value);
+}
+void World::RemoveLight(Entity entity) { m_lights.Remove(entity); }
+LightComponent* World::GetLight(Entity entity) { return m_lights.Get(entity); }
+const LightComponent* World::GetLight(Entity entity) const { return m_lights.Get(entity); }
+bool World::HasLight(Entity entity) const { return m_lights.Has(entity); }
 
 glm::mat4 World::GetWorldMatrix(Entity entity) const {
     constexpr int kMaxParentChainDepth = 64;
@@ -141,6 +150,14 @@ ColliderComponent* World::GetComponent<ColliderComponent>(Entity entity) {
 template <>
 const ColliderComponent* World::GetComponent<ColliderComponent>(Entity entity) const {
     return GetCollider(entity);
+}
+template <>
+LightComponent* World::GetComponent<LightComponent>(Entity entity) {
+    return GetLight(entity);
+}
+template <>
+const LightComponent* World::GetComponent<LightComponent>(Entity entity) const {
+    return GetLight(entity);
 }
 
 } // namespace engine::ecs

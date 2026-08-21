@@ -66,6 +66,8 @@ if(TARGET cooker)
         "${CMAKE_SOURCE_DIR}/shaders/m_material_color.frag"
         "${CMAKE_SOURCE_DIR}/shaders/m_material_textured_color.vert"
         "${CMAKE_SOURCE_DIR}/shaders/m_material_textured_color.frag"
+        "${CMAKE_SOURCE_DIR}/shaders/m_forward_lit_shaded.vert"
+        "${CMAKE_SOURCE_DIR}/shaders/m_forward_lit_shaded.frag"
     )
     set(_pi_engine_cooked_shaders "")
     foreach(shader_source ${_pi_engine_shader_sources})

@@ -66,6 +66,7 @@ add_library(engine_core STATIC
     src/renderer/CookedTexture.cpp
     src/renderer/ForwardLitPipeline.cpp
     src/renderer/ForwardLitColorPipeline.cpp
+    src/renderer/ForwardLitShadedPipeline.cpp
     src/renderer/ForwardLitTexturedPipeline.cpp
     src/renderer/ForwardLitTexturedColorPipeline.cpp
     src/renderer/FrustumCuller.cpp

@@ -3,6 +3,7 @@
 #include "engine/ecs/ComponentStorage.h"
 #include "engine/ecs/Entity.h"
 #include "engine/ecs/components/ColliderComponent.h"
+#include "engine/ecs/components/LightComponent.h"
 #include "engine/ecs/components/MeshComponent.h"
 #include "engine/ecs/components/RigidbodyComponent.h"
 #include "engine/ecs/components/TransformComponent.h"
@@ -13,9 +14,10 @@ namespace engine::ecs {
 
 // Minimal ECS world (docs/03 section 7): entity lifetime (creation, destruction with
 // generation invalidation, index recycling) plus one ComponentStorage<T> per known
-// component type. Growing the set of component types means adding another
+// component type (M2 started with two -- Transform, Mesh -- M4 added Rigidbody/Collider,
+// lighting phase A added Light). Growing the set of component types means adding another
 // ComponentStorage<T> member and its Add/Get/Remove/Has wrappers here -- not a generic
-// registry, deliberately, matching M2's actual two component types.
+// registry, deliberately.
 class World {
 public:
     Entity CreateEntity();
@@ -46,6 +48,14 @@ public:
     const ColliderComponent* GetCollider(Entity entity) const;
     bool HasCollider(Entity entity) const;
 
+    // Lighting phase A (docs/01 section 8.3) -- same shape as every other component group
+    // above.
+    LightComponent& AddLight(Entity entity, const LightComponent& value = {});
+    void RemoveLight(Entity entity);
+    LightComponent* GetLight(Entity entity);
+    const LightComponent* GetLight(Entity entity) const;
+    bool HasLight(Entity entity) const;
+
     // Hierarchy (post-Editor-E8, docs/07-unity-parity-analysis.md): composes `entity`'s
     // world-space matrix by walking TransformComponent::parent up to a root, multiplying
     // each ancestor's own *local* matrix on the left as it goes (standard scene-graph
@@ -71,6 +81,9 @@ public:
     ComponentStorage<RigidbodyComponent>& Rigidbodies() { return m_rigidbodies; }
     const ComponentStorage<RigidbodyComponent>& Rigidbodies() const { return m_rigidbodies; }
     ComponentStorage<ColliderComponent>& Colliders() { return m_colliders; }
+    const ComponentStorage<ColliderComponent>& Colliders() const { return m_colliders; }
+    ComponentStorage<LightComponent>& Lights() { return m_lights; }
+    const ComponentStorage<LightComponent>& Lights() const { return m_lights; }
 
     // Generic dispatch to the typed Get*() accessors above, for script/ComponentHandle.h
     // (M3): a handle just needs "give me my T back given a World and an Entity" without
@@ -96,6 +109,7 @@ private:
     ComponentStorage<MeshComponent> m_meshes;
     ComponentStorage<RigidbodyComponent> m_rigidbodies;
     ComponentStorage<ColliderComponent> m_colliders;
+    ComponentStorage<LightComponent> m_lights;
 };
 
 // Explicit specializations (defined in World.cpp) -- declared here so every translation
@@ -117,5 +131,9 @@ template <>
 ColliderComponent* World::GetComponent<ColliderComponent>(Entity entity);
 template <>
 const ColliderComponent* World::GetComponent<ColliderComponent>(Entity entity) const;
+template <>
+LightComponent* World::GetComponent<LightComponent>(Entity entity);
+template <>
+const LightComponent* World::GetComponent<LightComponent>(Entity entity) const;
 
 } // namespace engine::ecs

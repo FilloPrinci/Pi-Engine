@@ -142,6 +142,11 @@ a fixed sequence up front.
   design, see `engine/scene/README.md`). `tools/cooker`'s own README lists exactly what's
   deferred and why.
 - `SDL2DisplayBackend` only through M7 so far — `DirectDRMDisplayBackend` comes later, didn't block the vertical slice.
+- Lighting: phase A done (docs/01 section 8.3's "Low-Poly Retro" profile) — `LightComponent`
+  (Directional/Point, up to 4 simultaneous, docs/01's own indicative budget),
+  `ForwardLitShadedPipeline` (minimal Blinn-Phong, no PBR), a per-frame lighting UBO. No
+  shadows yet (a static-only shadow map, docs/01's "preferably baked" guidance, is phase B,
+  not started).
 
 **Explicitly out of scope still** (already designed in docs/01, not started): Audio (deferred at the user's request — not currently testable), gamepad, bloom/post-processing, PBR profile, per-hardware-profile output (Hardware Profile System), Networking.
 

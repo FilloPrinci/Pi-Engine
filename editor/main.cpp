@@ -16,6 +16,7 @@
 #include "engine/renderer/CookedTexture.h"
 #include "engine/renderer/ForwardLitColorPipeline.h"
 #include "engine/renderer/ForwardLitPipeline.h"
+#include "engine/renderer/ForwardLitShadedPipeline.h"
 #include "engine/renderer/ForwardLitTexturedColorPipeline.h"
 #include "engine/renderer/MaterialData.h"
 #include "engine/renderer/ShaderPropertySchema.h"
@@ -66,7 +67,11 @@ using engine::platform::Key;
 using engine::platform::SDL2DisplayBackend;
 using engine::renderer::ForwardLitColorPipeline;
 using engine::renderer::ForwardLitPipeline;
+using engine::renderer::ForwardLitShadedPipeline;
 using engine::renderer::ForwardLitTexturedColorPipeline;
+using engine::renderer::FrameLightingData;
+using engine::renderer::GpuLight;
+using engine::renderer::kMaxLights;
 using engine::renderer::FindMaterialShader;
 using engine::renderer::MaterialData;
 using engine::renderer::MaterialPropertyValue;
@@ -667,6 +672,85 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    // Lighting phase A (post-Editor-E8, docs/01 section 8.3) -- a fourth separate concrete
+    // pipeline (CLAUDE.md rule 7), bound for entities whose material targets
+    // "ForwardLitShaded" (see the render loop below).
+    ForwardLitShadedPipeline shadedPipeline;
+    if (!shadedPipeline.Init(context, renderPass, swapchain.GetExtent(),
+                             ShaderPath("m_forward_lit_shaded.vert.spv").c_str(),
+                             ShaderPath("m_forward_lit_shaded.frag.spv").c_str())) {
+        return EXIT_FAILURE;
+    }
+
+    // --- Frame lighting UBO (FrameLightingData, ForwardLitShadedPipeline.h's own comment
+    //     for why this is a UBO and not a push constant) -- one buffer + one descriptor
+    //     set *per frame-in-flight* (kMaxFramesInFlight, same index as every other
+    //     per-frame resource in this function), not one shared instance: without this,
+    //     writing this frame's light data into the same buffer the GPU might still be
+    //     reading from the *previous* frame's draw calls would be a real race. The
+    //     descriptor sets are allocated and pointed at their own buffer once, up front --
+    //     only the buffer's *contents* change every frame (RHIBuffer::UpdateData()),
+    //     never which buffer a given frame's descriptor set points to. ---
+    RHIBuffer frameLightingBuffers[kMaxFramesInFlight];
+    for (int i = 0; i < kMaxFramesInFlight; ++i) {
+        FrameLightingData defaultData;
+        if (!frameLightingBuffers[i].InitWithData(context, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                                   &defaultData, sizeof(FrameLightingData))) {
+            return EXIT_FAILURE;
+        }
+    }
+
+    VkDescriptorPoolSize frameLightingPoolSize{};
+    frameLightingPoolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    frameLightingPoolSize.descriptorCount = kMaxFramesInFlight;
+
+    VkDescriptorPoolCreateInfo frameLightingPoolInfo{};
+    frameLightingPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    frameLightingPoolInfo.maxSets = kMaxFramesInFlight;
+    frameLightingPoolInfo.poolSizeCount = 1;
+    frameLightingPoolInfo.pPoolSizes = &frameLightingPoolSize;
+
+    VkDescriptorPool frameLightingDescriptorPool = VK_NULL_HANDLE;
+    if (vkCreateDescriptorPool(device, &frameLightingPoolInfo, nullptr,
+                               &frameLightingDescriptorPool) != VK_SUCCESS) {
+        std::fprintf(stderr, "editor: vkCreateDescriptorPool (frame lighting) failed\n");
+        return EXIT_FAILURE;
+    }
+
+    VkDescriptorSet frameLightingDescriptorSets[kMaxFramesInFlight];
+    {
+        VkDescriptorSetLayout frameLightingLayout = shadedPipeline.GetDescriptorSetLayout();
+        VkDescriptorSetLayout layouts[kMaxFramesInFlight];
+        for (int i = 0; i < kMaxFramesInFlight; ++i) {
+            layouts[i] = frameLightingLayout;
+        }
+        VkDescriptorSetAllocateInfo frameLightingAllocInfo{};
+        frameLightingAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        frameLightingAllocInfo.descriptorPool = frameLightingDescriptorPool;
+        frameLightingAllocInfo.descriptorSetCount = kMaxFramesInFlight;
+        frameLightingAllocInfo.pSetLayouts = layouts;
+        if (vkAllocateDescriptorSets(device, &frameLightingAllocInfo, frameLightingDescriptorSets) !=
+            VK_SUCCESS) {
+            std::fprintf(stderr, "editor: vkAllocateDescriptorSets (frame lighting) failed\n");
+            return EXIT_FAILURE;
+        }
+        for (int i = 0; i < kMaxFramesInFlight; ++i) {
+            VkDescriptorBufferInfo bufferInfo{};
+            bufferInfo.buffer = frameLightingBuffers[i].GetHandle();
+            bufferInfo.offset = 0;
+            bufferInfo.range = sizeof(FrameLightingData);
+
+            VkWriteDescriptorSet write{};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = frameLightingDescriptorSets[i];
+            write.dstBinding = 0;
+            write.descriptorCount = 1;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            write.pBufferInfo = &bufferInfo;
+            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+        }
+    }
+
     // --- Descriptor pool for material texture properties -- one combined-image-sampler
     //     descriptor set per distinct texture GUID actually used by a resolved material
     //     this session (see resolveTexture() below), not per entity/draw. maxSets=32 is a
@@ -847,6 +931,8 @@ int main(int argc, char** argv) {
     camera.distance = 12.0f;
     camera.pitch = 0.5f;
     glm::mat4 currentViewProj(1.0f);
+    glm::vec3 currentCameraWorldPosition(0.0f); // Lighting phase A -- Blinn-Phong's view
+                                                // direction (m_forward_lit_shaded.frag).
     int currentFrame = 0;
 
     std::uint32_t framesSinceReport = 0;
@@ -892,6 +978,11 @@ int main(int argc, char** argv) {
     bool capturedColliderIsTrigger = false;
     float capturedRigidbodyMass = 0.0f;
     bool capturedRigidbodyIsStatic = false;
+    glm::vec3 capturedLightColor(0.0f);
+    float capturedLightIntensity = 0.0f;
+    float capturedLightRange = 0.0f;
+    bool capturedLightIsStatic = false;
+    bool capturedLightCastsShadow = false;
 
     // --- Save status (Editor step E4) -- shown for a few seconds after a Save click so
     //     the button press has visible feedback beyond a stderr line. ---
@@ -1542,6 +1633,85 @@ int main(int argc, char** argv) {
                     }
                 }
             }
+            if (engine::ecs::LightComponent* light = world.GetLight(selectedEntity)) {
+                if (ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    // Type switching (lighting phase A, docs/01 section 8.3) -- same
+                    // instant-discrete-choice-pushes-directly reasoning as Collider's own
+                    // Shape combo (setShapeWithUndo() above).
+                    const bool isDirectional =
+                        light->type == engine::ecs::LightComponent::Type::Directional;
+                    auto setLightTypeWithUndo = [&](engine::ecs::LightComponent::Type newType) {
+                        const engine::ecs::LightComponent::Type oldType = light->type;
+                        if (oldType == newType) {
+                            return;
+                        }
+                        light->type = newType;
+                        undoStack.Push(
+                            [&world, entity = selectedEntity, oldType]() {
+                                if (engine::ecs::LightComponent* l = world.GetLight(entity)) {
+                                    l->type = oldType;
+                                }
+                            },
+                            [&world, entity = selectedEntity, newType]() {
+                                if (engine::ecs::LightComponent* l = world.GetLight(entity)) {
+                                    l->type = newType;
+                                }
+                            });
+                    };
+                    if (ImGui::BeginCombo("Type", isDirectional ? "Directional" : "Point")) {
+                        if (ImGui::Selectable("Directional", isDirectional)) {
+                            setLightTypeWithUndo(engine::ecs::LightComponent::Type::Directional);
+                        }
+                        if (ImGui::Selectable("Point", !isDirectional)) {
+                            setLightTypeWithUndo(engine::ecs::LightComponent::Type::Point);
+                        }
+                        ImGui::EndCombo();
+                    }
+
+                    ImGui::ColorEdit3("Color", &light->color.x);
+                    TrackFieldEdit(undoStack, world, selectedEntity, light->color,
+                                   capturedLightColor, [](World& w, Entity e) -> glm::vec3* {
+                                       engine::ecs::LightComponent* l = w.GetLight(e);
+                                       return l != nullptr ? &l->color : nullptr;
+                                   });
+
+                    ImGui::DragFloat("Intensity", &light->intensity, 0.05f, 0.0f, 100.0f);
+                    TrackFieldEdit(undoStack, world, selectedEntity, light->intensity,
+                                   capturedLightIntensity, [](World& w, Entity e) -> float* {
+                                       engine::ecs::LightComponent* l = w.GetLight(e);
+                                       return l != nullptr ? &l->intensity : nullptr;
+                                   });
+
+                    if (!isDirectional) {
+                        ImGui::DragFloat("Range", &light->range, 0.1f, 0.01f, 1000.0f);
+                        TrackFieldEdit(undoStack, world, selectedEntity, light->range,
+                                       capturedLightRange, [](World& w, Entity e) -> float* {
+                                           engine::ecs::LightComponent* l = w.GetLight(e);
+                                           return l != nullptr ? &l->range : nullptr;
+                                       });
+                    }
+
+                    // isStatic/castsShadow (lighting phase A) -- runtime hints only in
+                    // this phase, see LightComponent.h's own comment: no bake-time effect
+                    // yet, castsShadow is reserved for phase B's static shadow map.
+                    ImGui::Checkbox("Is Static", &light->isStatic);
+                    TrackFieldEdit(undoStack, world, selectedEntity, light->isStatic,
+                                   capturedLightIsStatic, [](World& w, Entity e) -> bool* {
+                                       engine::ecs::LightComponent* l = w.GetLight(e);
+                                       return l != nullptr ? &l->isStatic : nullptr;
+                                   });
+                    ImGui::Checkbox("Casts Shadow", &light->castsShadow);
+                    TrackFieldEdit(undoStack, world, selectedEntity, light->castsShadow,
+                                   capturedLightCastsShadow, [](World& w, Entity e) -> bool* {
+                                       engine::ecs::LightComponent* l = w.GetLight(e);
+                                       return l != nullptr ? &l->castsShadow : nullptr;
+                                   });
+
+                    if (ImGui::Button("Remove Light")) {
+                        world.RemoveLight(selectedEntity);
+                    }
+                }
+            }
 
             // Add Component (post-Editor-E8, "make everything the Editor shows
             // manageable") -- only offers a component type the entity doesn't already
@@ -1551,7 +1721,7 @@ int main(int argc, char** argv) {
             // ECS component, so it's assigned from the Mesh section above instead (only
             // meaningful once an entity already has a Mesh to attach it to).
             if (!world.HasMesh(selectedEntity) || !world.HasCollider(selectedEntity) ||
-                !world.HasRigidbody(selectedEntity)) {
+                !world.HasRigidbody(selectedEntity) || !world.HasLight(selectedEntity)) {
                 ImGui::Separator();
                 ImGui::TextUnformatted("Add Component:");
                 bool anyAddComponentButton = false;
@@ -1578,6 +1748,8 @@ int main(int argc, char** argv) {
                                    [&]() { world.AddCollider(selectedEntity); });
                 addComponentButton("+ Rigidbody", world.HasRigidbody(selectedEntity),
                                    [&]() { world.AddRigidbody(selectedEntity); });
+                addComponentButton("+ Light", world.HasLight(selectedEntity),
+                                   [&]() { world.AddLight(selectedEntity); });
             }
         } else {
             ImGui::TextUnformatted("No entity selected -- click one in the Hierarchy panel.");
@@ -1936,6 +2108,7 @@ int main(int argc, char** argv) {
         }
 
         currentViewProj = viewProj;
+        currentCameraWorldPosition = glm::vec3(glm::inverse(camera.GetViewMatrix())[3]);
     };
 
     callbacks.onRender = [&]() {
@@ -1982,6 +2155,50 @@ int main(int argc, char** argv) {
         renderPassBeginInfo.renderArea.extent = swapchain.GetExtent();
         renderPassBeginInfo.clearValueCount = 2;
         renderPassBeginInfo.pClearValues = clearValues;
+
+        // Lighting phase A (post-Editor-E8, docs/01 section 8.3) -- collect up to
+        // kMaxLights active LightComponents into this frame's FrameLightingData and
+        // upload it into *this* frame-in-flight's own UBO instance, before any
+        // ForwardLitShaded draw reads it below. Not gated on whether a ForwardLitShaded
+        // entity actually exists this frame -- cheap enough (a handful of lights, one
+        // small memcpy) that tracking "is it needed" wouldn't be worth the complexity.
+        {
+            FrameLightingData frameLighting;
+            frameLighting.viewProj = currentViewProj;
+            frameLighting.cameraWorldPosition = glm::vec4(currentCameraWorldPosition, 0.0f);
+
+            const auto& lights = world.Lights().Data();
+            const auto& lightEntities = world.Lights().Entities();
+            int activeLightCount = 0;
+            for (std::size_t i = 0; i < lights.size() && activeLightCount < kMaxLights; ++i) {
+                if (world.GetTransform(lightEntities[i]) == nullptr) {
+                    continue;
+                }
+                const glm::mat4 lightWorld = world.GetWorldMatrix(lightEntities[i]);
+                GpuLight& gpuLight = frameLighting.lights[activeLightCount];
+                if (lights[i].type == engine::ecs::LightComponent::Type::Point) {
+                    gpuLight.positionOrDirection = glm::vec4(glm::vec3(lightWorld[3]), 1.0f);
+                } else {
+                    // Directional -- local forward is -Z (this project's own convention,
+                    // ForwardLitShadedPipeline.h's own comment), transformed by the
+                    // light's world rotation (mat3 of its world matrix -- same uniform-
+                    // scale simplification the shader itself already documents).
+                    const glm::vec3 worldForward =
+                        glm::normalize(glm::mat3(lightWorld) * glm::vec3(0.0f, 0.0f, -1.0f));
+                    gpuLight.positionOrDirection = glm::vec4(worldForward, 0.0f);
+                }
+                gpuLight.color = glm::vec4(lights[i].color, lights[i].intensity);
+                gpuLight.params = glm::vec4(lights[i].range, 0.0f, 0.0f, 0.0f);
+                ++activeLightCount;
+            }
+            // Flat ambient term, not yet scene-configurable -- a fixed, modest default
+            // (post-Editor-E8, docs/01 section 8.3's scope doesn't call for an ambient
+            // authoring control yet; add one only once a real shader/UI need shows up).
+            frameLighting.ambientAndCount =
+                glm::vec4(0.05f, 0.05f, 0.05f, static_cast<float>(activeLightCount));
+
+            frameLightingBuffers[currentFrame].UpdateData(&frameLighting, sizeof(FrameLightingData));
+        }
 
         vkCmdBeginRenderPass(cmd, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -2095,6 +2312,36 @@ int main(int argc, char** argv) {
             vkCmdDrawIndexed(cmd, draw->gpuData->indexCount, 1, 0, 0, 0);
         }
 
+        // Pass 4: material targeting "ForwardLitShaded" -- lit (Blinn-Phong, lighting
+        // phase A, docs/01 section 8.3). Binds the frame lighting descriptor set once,
+        // before any entity in this pass draws (same data for every one of them, unlike
+        // the per-draw texture descriptor set Pass 3 rebinds per material).
+        shadedPipeline.Bind(cmd);
+        shadedPipeline.BindFrameDescriptorSet(cmd, frameLightingDescriptorSets[currentFrame]);
+        for (std::size_t i = 0; i < meshes.size(); ++i) {
+            if (meshes[i].materialGuid == engine::asset::kInvalidAssetGuid) {
+                continue;
+            }
+            MaterialData* material = resolveMaterial(meshes[i].materialGuid);
+            if (material == nullptr || material->shaderName != "ForwardLitShaded") {
+                continue;
+            }
+            if (world.GetTransform(meshEntities[i]) == nullptr) {
+                continue;
+            }
+            MeshGpuData* gpuData = resolveMesh(meshes[i].meshGuid);
+            if (gpuData == nullptr) {
+                continue;
+            }
+            bindMeshBuffers(*gpuData);
+            // The *model* matrix, not MVP -- this pipeline multiplies by the frame UBO's
+            // viewProj itself (ForwardLitShadedPipeline.h's own comment for why).
+            const glm::mat4 model = world.GetWorldMatrix(meshEntities[i]);
+            const glm::vec4 tint = material->GetColor("tintColor", glm::vec4(1.0f));
+            shadedPipeline.PushModelAndTint(cmd, model, tint);
+            vkCmdDrawIndexed(cmd, gpuData->indexCount, 1, 0, 0, 0);
+        }
+
         // ImGui draws last, into the same render pass/subpass, on top of the scene.
         overlay.Render(cmd);
 
@@ -2179,6 +2426,7 @@ int main(int argc, char** argv) {
     pipeline.Shutdown();
     colorPipeline.Shutdown();
     texturedColorPipeline.Shutdown();
+    shadedPipeline.Shutdown();
     destroyDepthResources();
     vkDestroyRenderPass(device, renderPass, nullptr);
 
@@ -2187,6 +2435,12 @@ int main(int argc, char** argv) {
     materialTextureCache.clear();
     // also frees every descriptor set allocated from it.
     vkDestroyDescriptorPool(device, materialTextureDescriptorPool, nullptr);
+    // Lighting phase A -- frees frameLightingDescriptorSets too, must happen before
+    // frameLightingBuffers themselves are destroyed just below.
+    vkDestroyDescriptorPool(device, frameLightingDescriptorPool, nullptr);
+    for (int i = 0; i < kMaxFramesInFlight; ++i) {
+        frameLightingBuffers[i].Shutdown();
+    }
     meshCache.clear(); // destroys every RHIBuffer -- must happen before context.Shutdown()
     swapchain.Shutdown();
     context.Shutdown();

@@ -272,15 +272,14 @@ std::vector<EntityDesc> ExtractEntityDescs(const ecs::World& world) {
             desc.colliderIsTrigger = collider->isTrigger;
         }
 
-        if (world.GetRigidbody(entity) != nullptr) {
-            // See WriteSceneDocument/ExtractEntityDescs's own header comment -- isStatic
-            // isn't recoverable from the live component, so this entity's rigidbody is
-            // dropped rather than guessed.
-            std::fprintf(stderr,
-                         "ExtractEntityDescs: entity %u.%u has a Rigidbody component whose "
-                         "static/dynamic flag can't be recovered -- omitting \"rigidbody\" "
-                         "from the saved file for this entity\n",
-                         entity.index, entity.generation);
+        if (const ecs::RigidbodyComponent* rigidbody = world.GetRigidbody(entity)) {
+            // isStatic now lives on the live component itself (post-Editor-E8,
+            // RigidbodyComponent.h's own comment) -- fully recoverable here, unlike the
+            // gap this exact spot used to document (a Rigidbody entity silently dropped on
+            // save because isStatic was read once and discarded).
+            desc.hasRigidbody = true;
+            desc.rigidbodyIsStatic = rigidbody->isStatic;
+            desc.rigidbodyMass = rigidbody->mass;
         }
 
         entities.push_back(desc);
@@ -329,6 +328,7 @@ std::vector<ecs::Entity> SpawnEntities(ecs::World& world, const std::vector<Enti
         if (desc.hasRigidbody) {
             ecs::RigidbodyComponent rigidbody;
             rigidbody.mass = desc.rigidbodyMass;
+            rigidbody.isStatic = desc.rigidbodyIsStatic;
             world.AddRigidbody(entity, rigidbody);
 
             if (!createPhysicsBody) {

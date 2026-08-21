@@ -34,28 +34,24 @@ bool WriteSceneDocument(const char* path, const std::vector<EntityDesc>& entitie
 // Inverse of SpawnEntities() -- reads every entity in `world` that has a Transform (what
 // SpawnEntities() always adds, so this is the same "one EntityDesc per spawned entity"
 // set) back into a flat EntityDesc list, picking up whatever live edits an Inspector panel
-// made since the entities were spawned. Two known, deliberate gaps, both the same shape --
-// something SpawnEntities() only *reads* once from the EntityDesc, with nowhere in the
-// live ECS state to read it back from afterward:
-// - RigidbodyComponent doesn't store whether a body is static or dynamic (only used once,
-//   to decide which PhysicsWorld::CreateBody() to call) -- an entity with a Rigidbody is
-//   skipped here (with a stderr warning) rather than guessing a value that could silently
-//   corrupt the saved file. Not a concern for the Editor yet: nothing in it creates a
-//   Rigidbody in the first place (Editor step E2's Scene View has no PhysicsWorld), so
-//   this only matters for a scene document that already had one before the Editor loaded
-//   it.
-// - EntityDesc::scriptNames isn't recoverable at all -- attached scripts live outside the
-//   ECS entirely (AttachScriptFn's caller owns the ScriptComponent instances, see
-//   SceneDocument.h), so there's no live state to read back even in principle, not even a
-//   presence check the way GetRigidbody() != nullptr allows above. `scripts` is always
-//   omitted here, silently -- consistent with the Editor's Scene View never attaching
-//   scripts in the first place (E2-E7's read-only view passes no AttachScriptFn either),
-//   so this again only matters for a scene document that already had a "scripts" block
-//   before the Editor loaded and re-saved it.
-// Unlike those two, TransformComponent::parent *is* live ECS state (added alongside
-// hierarchy support, post-Editor-E8) -- fully recoverable here, translated back from an
-// ecs::Entity to an EntityDesc::parentIndex via this same function's own output order (the
-// Nth entity in `world.Transforms().Entities()` becomes the Nth EntityDesc, so a parent's
+// made since the entities were spawned. One remaining, known, deliberate gap:
+// EntityDesc::scriptNames isn't recoverable at all -- attached scripts live outside the
+// ECS entirely (AttachScriptFn's caller owns the ScriptComponent instances, see
+// SceneDocument.h), so there's no live state to read back even in principle, not even a
+// presence check the way GetRigidbody() != nullptr allows for a Rigidbody. `scripts` is
+// always omitted here, silently -- consistent with the Editor's Scene View never
+// attaching scripts in the first place (E2-E7's read-only view passes no AttachScriptFn
+// either), so this only matters for a scene document that already had a "scripts" block
+// before the Editor loaded and re-saved it.
+// RigidbodyComponent::isStatic used to be this same shape of gap (read once by
+// SpawnEntities(), nowhere in the live ECS state to read back from afterward, so an
+// entity with a Rigidbody was silently dropped from the saved file) -- fixed post-
+// Editor-E8 by retaining isStatic on the component itself (RigidbodyComponent.h's own
+// comment), so a Rigidbody now round-trips fully like everything else.
+// TransformComponent::parent *is* live ECS state (added alongside hierarchy support,
+// post-Editor-E8) -- fully recoverable here, translated back from an ecs::Entity to an
+// EntityDesc::parentIndex via this same function's own output order (the Nth entity in
+// `world.Transforms().Entities()` becomes the Nth EntityDesc, so a parent's
 // position in that same sequence is exactly the index SpawnEntities() will resolve it back
 // from -- no separate id map needs to survive the round trip).
 std::vector<EntityDesc> ExtractEntityDescs(const ecs::World& world);

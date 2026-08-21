@@ -891,6 +891,7 @@ int main(int argc, char** argv) {
     float capturedColliderRadius = 0.0f;
     bool capturedColliderIsTrigger = false;
     float capturedRigidbodyMass = 0.0f;
+    bool capturedRigidbodyIsStatic = false;
 
     // --- Save status (Editor step E4) -- shown for a few seconds after a Save click so
     //     the button press has visible feedback beyond a stderr line. ---
@@ -1453,7 +1454,39 @@ int main(int argc, char** argv) {
             if (ColliderComponent* collider = world.GetCollider(selectedEntity)) {
                 if (ImGui::CollapsingHeader("Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
                     const bool isBox = collider->shapeType == ColliderComponent::ShapeType::Box;
-                    ImGui::Text("Shape: %s", isBox ? "Box" : "Sphere");
+                    // Shape switching (post-Editor-E8, "make everything the Editor shows
+                    // manageable" phase 3) -- pushed directly to undoStack rather than
+                    // through TrackFieldEdit(), same reasoning reparentWithUndo() above
+                    // gives: an instant, discrete combo selection has no drag gesture to
+                    // batch, so there's no IsItemActivated()/IsItemDeactivatedAfterEdit()
+                    // pair to hook.
+                    auto setShapeWithUndo = [&](ColliderComponent::ShapeType newShape) {
+                        const ColliderComponent::ShapeType oldShape = collider->shapeType;
+                        if (oldShape == newShape) {
+                            return;
+                        }
+                        collider->shapeType = newShape;
+                        undoStack.Push(
+                            [&world, entity = selectedEntity, oldShape]() {
+                                if (ColliderComponent* c = world.GetCollider(entity)) {
+                                    c->shapeType = oldShape;
+                                }
+                            },
+                            [&world, entity = selectedEntity, newShape]() {
+                                if (ColliderComponent* c = world.GetCollider(entity)) {
+                                    c->shapeType = newShape;
+                                }
+                            });
+                    };
+                    if (ImGui::BeginCombo("Shape", isBox ? "Box" : "Sphere")) {
+                        if (ImGui::Selectable("Box", isBox)) {
+                            setShapeWithUndo(ColliderComponent::ShapeType::Box);
+                        }
+                        if (ImGui::Selectable("Sphere", !isBox)) {
+                            setShapeWithUndo(ColliderComponent::ShapeType::Sphere);
+                        }
+                        ImGui::EndCombo();
+                    }
                     if (isBox) {
                         ImGui::DragFloat3("Half extents", &collider->halfExtents.x, 0.05f, 0.01f,
                                           50.0f);
@@ -1485,6 +1518,19 @@ int main(int argc, char** argv) {
             if (engine::ecs::RigidbodyComponent* rigidbody = world.GetRigidbody(selectedEntity)) {
                 if (ImGui::CollapsingHeader("Rigidbody", ImGuiTreeNodeFlags_DefaultOpen)) {
                     ImGui::Text("Body id: %u", rigidbody->bodyId);
+                    // isStatic (post-Editor-E8, RigidbodyComponent.h's own comment) --
+                    // read once at PhysicsWorld::CreateBody() time (M4 scope, unchanged),
+                    // so editing it here only takes effect the next time this entity
+                    // spawns into a real PhysicsWorld (Play Mode) -- the Editor's own
+                    // Scene View has no PhysicsWorld to show a live effect in, same
+                    // "authoring data for Play Mode" story every other Rigidbody field
+                    // already has.
+                    ImGui::Checkbox("Is Static", &rigidbody->isStatic);
+                    TrackFieldEdit(undoStack, world, selectedEntity, rigidbody->isStatic,
+                                   capturedRigidbodyIsStatic, [](World& w, Entity e) -> bool* {
+                                       engine::ecs::RigidbodyComponent* r = w.GetRigidbody(e);
+                                       return r != nullptr ? &r->isStatic : nullptr;
+                                   });
                     ImGui::DragFloat("Mass", &rigidbody->mass, 0.1f, 0.01f, 1000.0f);
                     TrackFieldEdit(undoStack, world, selectedEntity, rigidbody->mass,
                                    capturedRigidbodyMass, [](World& w, Entity e) -> float* {

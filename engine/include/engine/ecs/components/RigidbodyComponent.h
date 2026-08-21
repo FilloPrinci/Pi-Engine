@@ -22,6 +22,18 @@ struct RigidbodyComponent {
     // yet). Meaningless for a static body.
     float mass = 1.0f;
 
+    // Read once, at PhysicsWorld::CreateBody() time, to decide which of its two body-
+    // creation paths to use (M4 scope -- no runtime static/dynamic toggling; Jolt itself
+    // supports that, but nothing in this engine has needed it yet). Retained here (post-
+    // Editor-E8, "make everything the Editor shows manageable") purely so the value
+    // survives round-trips it didn't used to: earlier, this flag was passed straight from
+    // scene JSON into SpawnEntities()'s CreatePhysicsBodyFn callback and discarded, so
+    // ExtractEntityDescs()/the Editor's own Save button had no live state to read it back
+    // from and silently dropped a "rigidbody" block on save (see SceneDocument.cpp's own
+    // comment, formerly on this exact gap). Storing it here closes that gap and lets the
+    // Editor's Inspector show/edit it directly.
+    bool isStatic = true;
+
     // Thin wrapper over Jolt's BodyInterface (docs/01 section 9.6), but still plain data --
     // never a JPH:: type in this header (see the comment above). Calls from a script's
     // OnUpdate (pre-physics phase) queue a request here; PhysicsWorld::Step() drains and

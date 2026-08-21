@@ -144,6 +144,9 @@ TEST_CASE("SpawnEntities creates ECS components matching each EntityDesc, no Phy
     descs[0].materialGuid = materialGuid;
     descs[0].hasCollider = true;
     descs[0].hasRigidbody = true;
+    descs[0].rigidbodyIsStatic = false; // distinct from RigidbodyComponent's own default
+                                        // (true), so this test actually exercises the
+                                        // propagation, not just its presence.
 
     const std::vector<Entity> spawned = SpawnEntities(world, descs, glm::vec3(0.0f), nullptr);
     REQUIRE(spawned.size() == 1);
@@ -159,6 +162,7 @@ TEST_CASE("SpawnEntities creates ECS components matching each EntityDesc, no Phy
     // than fatal, see SpawnEntities' own comment), just with no live Jolt body.
     REQUIRE(world.HasRigidbody(entity));
     CHECK(world.GetRigidbody(entity)->bodyId == RigidbodyComponent::kInvalidBodyId);
+    CHECK_FALSE(world.GetRigidbody(entity)->isStatic);
 }
 
 TEST_CASE("SpawnEntities applies positionOffset on top of each EntityDesc's own position") {
@@ -236,8 +240,8 @@ TEST_CASE("A Prefab that failed to load is not IsLoaded()") {
     CHECK_FALSE(prefab.IsLoaded());
 }
 
-TEST_CASE("ExtractEntityDescs/WriteSceneDocument round-trip preserves transform/mesh/collider, "
-          "drops rigidbody") {
+TEST_CASE("ExtractEntityDescs/WriteSceneDocument round-trip preserves transform/mesh/collider/"
+          "rigidbody") {
     ScopedTempFile sourceFile("scene_extract_source.tmp.json", kTwoEntityScene);
     World world;
     REQUIRE(LoadScene(sourceFile.m_path, world));
@@ -265,11 +269,12 @@ TEST_CASE("ExtractEntityDescs/WriteSceneDocument round-trip preserves transform/
     REQUIRE(first.hasCollider);
     CHECK(first.colliderShape == ColliderComponent::ShapeType::Box);
     CHECK(first.colliderHalfExtents == glm::vec3(0.5f));
-    // The source document's first entity has a "rigidbody" block, but
-    // RigidbodyComponent doesn't store isStatic (see SceneDocument.h's own comment) --
-    // ExtractEntityDescs can't recover it, so it's correctly absent after the round-trip
-    // rather than silently wrong.
-    CHECK_FALSE(first.hasRigidbody);
+    // RigidbodyComponent::isStatic now lives on the live component (post-Editor-E8,
+    // RigidbodyComponent.h's own comment) -- fully recoverable, unlike the gap this test
+    // used to document.
+    REQUIRE(first.hasRigidbody);
+    CHECK_FALSE(first.rigidbodyIsStatic);
+    CHECK(first.rigidbodyMass == doctest::Approx(2.5f));
 
     const EntityDesc& second = reloaded[1];
     CHECK_FALSE(second.hasMesh);
@@ -323,7 +328,8 @@ TEST_CASE("WriteSceneDocument omits \"scripts\" entirely when empty (no empty ar
 }
 
 TEST_CASE("ExtractEntityDescs cannot recover scriptNames -- dropped on a Save round-trip, "
-          "same documented gap as Rigidbody's isStatic") {
+          "the one remaining gap of this shape (RigidbodyComponent::isStatic used to be "
+          "another, now fixed)") {
     ScopedTempFile sourceFile("scene_scripts_extract_source.tmp.json", R"({
         "entities": [
             {"transform": {"position": [0.0, 0.0, 0.0]}, "scripts": ["RotateScript"]}

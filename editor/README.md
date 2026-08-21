@@ -328,6 +328,34 @@ races precisely enough to fix a test-harness quirk (not application code) wasn't
 time against the actual feature already being solidly verified through the rest of the
 sequence.
 
+**Also post-E8**: Collider shape switching + Rigidbody `isStatic` storage (phase 3 of the
+same "make everything the Editor shows manageable" plan phase 1's object creation/Add-
+Remove-Component work started). The Collider section's "Shape: Box/Sphere" static text
+became a real `Box`/`Sphere` combo, pushed directly to `undoStack` on selection (same
+`reparentWithUndo()`-style reasoning as the Transform "Parent" combo -- an instant, discrete
+choice has no drag gesture to batch through `TrackFieldEdit()`) -- switching shows/hides
+"Half extents" vs. "Radius" immediately, same live-edit-no-apply-step behavior every other
+Inspector field already has. `engine::ecs::RigidbodyComponent` gained a real `isStatic`
+field (`RigidbodyComponent.h`'s own comment) -- previously read once at
+`PhysicsWorld::CreateBody()` time and discarded, so `ExtractEntityDescs()` had to silently
+drop a whole `"rigidbody"` block on Save rather than guess (a gap this project's own docs
+had named explicitly, more than once). Now it round-trips fully: `SpawnEntities()` stores
+it on the live component, `ExtractEntityDescs()` reads it back, and the Rigidbody section
+gained an "Is Static" checkbox (`TrackFieldEdit()`-tracked, same as Collider's own "Is
+trigger"). `editor/assets/demo.scene.json`'s collider-box entity gained a `"rigidbody":
+{"isStatic": false, "mass": 1.0}` block as a live example -- `isStatic: false` deliberately
+not `RigidbodyComponent`'s own default (`true`), so watching it actually fall/topple under
+gravity in Play Mode is real proof the value made it all the way from JSON into a live
+Jolt body, not just that the field exists. Verified on Pi4: Shape combo switch (Box ->
+Sphere, `Half extents` swapping for `Radius`) and its Undo both confirmed via screenshot;
+"Is Static" checkbox toggle confirmed pushing an Undo entry (button state
+enabled/disabled around the click); the demo scene's dynamic Rigidbody entity visibly
+tips over and settles under gravity in Play Mode, at 59-60 FPS capped and ~202 FPS
+uncapped. Neither of these two field edits needed the "structural operation" Undo
+exclusion Add/Remove Component and Create/Delete Entity have -- a shape/isStatic value
+change doesn't touch an `Entity` handle's lifetime the way creating or destroying one
+does, so both went straight into `undoStack` like every other Inspector field.
+
 Mesh resolution (`resolveMesh`) is a real GUID → cooked-path index now (fixed alongside
 material assets' Texture property type, see that section above) — every `*.mesh` file
 under `assets_cooked/` is resolvable, not just `m1_cube.mesh`. Still not a real

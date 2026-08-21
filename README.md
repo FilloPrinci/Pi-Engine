@@ -72,7 +72,11 @@ too: "Create Empty"/"Create Cube" buttons and a right-click "Delete" in the Hier
 panel, and "Add Component"/"Remove Component" buttons in the Inspector (offering only the
 component types an entity doesn't already have) — a Mesh with no material yet gets an
 "Assign Material" picker instead of a fixed "Add Component" entry, since a material is a
-property of the Mesh, not its own component.
+property of the Mesh, not its own component. The Collider section's shape is now a real
+Box/Sphere switch (not read-only text), and Rigidbody gained an "Is Static" checkbox
+backed by a real `isStatic` field on the component itself — previously read once and
+discarded, so saving a scene with a Rigidbody used to silently drop it entirely; it now
+round-trips like everything else.
 
 ## Prerequisites
 

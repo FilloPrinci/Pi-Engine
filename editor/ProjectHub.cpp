@@ -1,5 +1,8 @@
 #include "ProjectHub.h"
 
+#include "engine/ecs/World.h"
+#include "engine/scene/Scene.h"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -124,6 +127,37 @@ void RecordRecentProject(const std::string& scenePath) {
         return;
     }
     out << json.dump(2);
+}
+
+bool CreateNewSceneFile(const std::string& path) {
+    std::error_code existsError;
+    if (std::filesystem::exists(path, existsError)) {
+        std::fprintf(stderr,
+                     "CreateNewSceneFile: \"%s\" already exists -- refusing to overwrite\n",
+                     path.c_str());
+        return false;
+    }
+
+    const std::filesystem::path filePath(path);
+    if (filePath.has_parent_path()) {
+        std::error_code dirError;
+        std::filesystem::create_directories(filePath.parent_path(), dirError);
+        if (dirError) {
+            std::fprintf(stderr, "CreateNewSceneFile: failed to create \"%s\": %s\n",
+                         filePath.parent_path().string().c_str(), dirError.message().c_str());
+            return false;
+        }
+    }
+
+    // Never populated -- SaveScene() just needs *a* World to iterate over, and an empty
+    // one writes the exact same "zero entities" document LoadScene() already round-trips
+    // for any other scene with nothing in it yet.
+    const engine::ecs::World emptyWorld;
+    if (!engine::scene::SaveScene(path.c_str(), emptyWorld)) {
+        std::fprintf(stderr, "CreateNewSceneFile: SaveScene(\"%s\") failed\n", path.c_str());
+        return false;
+    }
+    return true;
 }
 
 #if PI_EDITOR_HUB_LINUX

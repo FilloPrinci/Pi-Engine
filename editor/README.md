@@ -432,5 +432,29 @@ general-purpose Asset Manifest (`engine/asset/README.md`) — this Editor's own 
 rebuilt fresh every launch by scanning the filesystem, the same shape material/texture
 resolution already use.
 
+**Project Hub gained real Open/New actions** (post-E8, the user's own explicit request to
+manage "the project" from the Editor -- "project" still means "scene file" here, see
+`ProjectHub.h`'s own comment for why). Before this, the recent-projects list could only
+ever offer a scene this machine had already opened at some point (via the original CLI
+arg, or a previous pick from that same list) -- there was no way to point the Editor at an
+arbitrary scene file, or start a brand-new empty one, without relaunching from a terminal.
+Two new fields in the Project Hub panel: "Open Scene File" (a path text field + button --
+checks the file exists, then the same `RelaunchWithProject()` one-process-per-open-scene
+relaunch the recent-projects list already uses) and "New Scene File" (a path text field +
+button -- `ProjectHub.h`'s new `CreateNewSceneFile()` writes a blank scene through the
+*exact* same `engine::scene::SaveScene()` path "Save" itself uses, just given a throwaway
+empty `World` instead of the Editor's live one, then relaunches into it the same way;
+refuses to overwrite an existing file). Plain `ImGui::InputText(char*, size_t)` rather than
+`imgui_stdlib`'s `std::string` overload -- that helper isn't vendored (would need its own
+`imgui_stdlib.cpp` alongside `third_party/imgui_backends/`), and a fixed buffer matches
+this Editor's existing "small, fixed, revisit if it ever matters" choices elsewhere
+(`kMaxRecentProjects`, descriptor pool caps, ...). No native file-picker dialog -- a raw
+path field is the same "no premature dependency, keep it simple" choice already made for
+every other path in this Editor (mesh/material/texture resolution all just scan a known
+directory rather than browse arbitrarily). Verified on Pi4: creating a new scene at a
+fresh path produces an empty, valid scene the Editor relaunches straight into (Hierarchy
+shows zero entities, `Save` afterward round-trips it normally); opening an existing scene
+by a hand-typed path works identically to picking it from the recent-projects list.
+
 See the roadmap doc for what's explicitly deferred to later steps, and
 `docs/07-unity-parity-analysis.md` for what's missing relative to Unity's own editor.

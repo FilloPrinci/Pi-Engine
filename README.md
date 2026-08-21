@@ -39,7 +39,10 @@ too; an Asset Browser lists `assets/` and the Cooker's output side by side, show
 selected source asset's persistent GUID; a Project Hub panel remembers every scene the
 Editor has opened and relaunches into a different one on click (`fork()`+`execv()`, one
 process per open project/scene, the same way Unity Hub and the Unity Editor are actually
-separate processes). **E8 — Build/Play/Debug pipeline** finishes the roadmap: a "Play"
+separate processes) — extended post-E8 with real "Open Scene File" (an arbitrary path,
+not just a previously-opened one) and "New Scene File" (writes a brand-new empty scene
+through the same save path as the Editor's own "Save" button, then opens it) actions.
+**E8 — Build/Play/Debug pipeline** finishes the roadmap: a "Play"
 button runs an incremental build + Cooker pass and launches the scene in a live,
 physics-simulated window (`editor_play`, a separate executable so Jolt's compile-flag
 requirements never leak onto the rest of the Editor's own source files); "Play in Debug"

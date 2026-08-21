@@ -1038,6 +1038,20 @@ int main(int argc, char** argv) {
     //     empty means nothing selected. ---
     std::string selectedSourceAsset;
 
+    // --- Project Hub: Open/New scene file (post-E8, direct extension of the recent-
+    //     projects list above -- the user's own explicit request to manage "the project"
+    //     from the Editor). Classic ImGui::InputText(char*, size_t) rather than
+    //     imgui_stdlib's std::string overload -- that helper isn't vendored (would need
+    //     its own imgui_stdlib.cpp alongside third_party/imgui_backends/, see that
+    //     directory's own README for why backends are vendored instead of relying on
+    //     vcpkg's imgui port), and a fixed buffer is the same "small, fixed, revisit if it
+    //     ever matters" choice this Editor already makes elsewhere (kMaxRecentProjects,
+    //     descriptor pool caps, ...). ---
+    char openScenePathBuffer[512] = "";
+    char newScenePathBuffer[512] = "";
+    std::string projectHubStatus;
+    float projectHubStatusRemainingSeconds = 0.0f;
+
     Application::Callbacks callbacks;
 
     callbacks.onUpdate = [&](float deltaSeconds, const engine::platform::InputState& input) {
@@ -1906,6 +1920,63 @@ int main(int argc, char** argv) {
                 ImGui::SameLine();
                 ImGui::TextDisabled("(current)");
             }
+        }
+
+        // --- Open an arbitrary scene file by path (post-E8) -- the recent-projects list
+        //     above only ever offers scenes this machine already opened at some point
+        //     (each entry got there via this exact same flow, or the original CLI arg);
+        //     this is the only way to point the Editor at a scene it's never seen before
+        //     without relaunching from a terminal. Same one-process-per-open-project
+        //     relaunch as the recent-projects list, not a live World reload. ---
+        ImGui::Separator();
+        ImGui::TextUnformatted("Open Scene File");
+        ImGui::SetNextItemWidth(-80.0f);
+        ImGui::InputTextWithHint("##OpenScenePath", "path/to/scene.json", openScenePathBuffer,
+                                 sizeof(openScenePathBuffer));
+        ImGui::SameLine();
+        if (ImGui::Button("Open")) {
+            const std::string path = openScenePathBuffer;
+            std::error_code existsError;
+            if (path.empty()) {
+                projectHubStatus = "Enter a path first.";
+            } else if (!std::filesystem::exists(path, existsError)) {
+                projectHubStatus = "File not found.";
+            } else if (RelaunchWithProject(path)) {
+                displayBackend.RequestQuit();
+            } else {
+                projectHubStatus = "Relaunch failed -- not supported on this platform.";
+            }
+            projectHubStatusRemainingSeconds = 3.0f;
+        }
+
+        // --- Create a brand-new, empty scene file at a chosen path, then open it
+        //     (post-E8) -- "start a new project from scratch". Refuses to overwrite an
+        //     existing file (CreateNewSceneFile()'s own comment); a genuinely new scene is
+        //     the only case where writing before the user ever clicked "Save" is correct,
+        //     since there is nothing to lose yet. ---
+        ImGui::Separator();
+        ImGui::TextUnformatted("New Scene File");
+        ImGui::SetNextItemWidth(-80.0f);
+        ImGui::InputTextWithHint("##NewScenePath", "path/to/new_scene.json", newScenePathBuffer,
+                                 sizeof(newScenePathBuffer));
+        ImGui::SameLine();
+        if (ImGui::Button("Create")) {
+            const std::string path = newScenePathBuffer;
+            if (path.empty()) {
+                projectHubStatus = "Enter a path first.";
+            } else if (!CreateNewSceneFile(path)) {
+                projectHubStatus = "Create failed -- file may already exist, see stderr.";
+            } else if (RelaunchWithProject(path)) {
+                displayBackend.RequestQuit();
+            } else {
+                projectHubStatus = "Created, but relaunch failed -- not supported on this platform.";
+            }
+            projectHubStatusRemainingSeconds = 3.0f;
+        }
+
+        if (projectHubStatusRemainingSeconds > 0.0f) {
+            projectHubStatusRemainingSeconds -= deltaSeconds;
+            ImGui::TextUnformatted(projectHubStatus.c_str());
         }
         ImGui::End();
 

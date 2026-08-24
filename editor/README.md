@@ -456,5 +456,50 @@ fresh path produces an empty, valid scene the Editor relaunches straight into (H
 shows zero entities, `Save` afterward round-trips it normally); opening an existing scene
 by a hand-typed path works identically to picking it from the recent-projects list.
 
+**"Make everything the Editor shows manageable" phases 4-5 (2026-08-24).** The user asked
+to proceed with both remaining phases of the plan first proposed alongside phase 1.
+
+*Phase 4 — New Material from the Editor.* The Mesh's "Material" section (shown for an
+entity with no material assigned) gained a "New Material" sub-section below "Assign
+Material" -- a Shader combo (every entry in `GetMaterialShaderRegistry()`, by name) and a
+path text field + "Create" button. Writes the new `.material.json` with the chosen
+shader's own declared property defaults (`EnsureMaterialProperty()`, the exact same
+fallback-filling logic the property-editing loop already uses -- no separate "build a
+default material" code path to drift out of sync), assigns the entity's `materialGuid`
+immediately (no relaunch -- this only adds an entry to the *live* process's own
+`materialGuidToPath`/`resolveMaterial` caches), and refuses to overwrite an existing file.
+Needed a genuinely new capability: `engine::asset::GenerateAndWriteAssetMetaGuid()`
+(`AssetMeta.h`/`.cpp`) -- every other asset kind only ever gets a GUID assigned once,
+offline, by `tools/cooker`'s own `GetOrCreateAssetGuid()`, but a material is never cooked
+at all (`MaterialData.h`'s own comment), so a brand-new one created *inside* the Editor
+has nowhere else to get a GUID from. Verified on Pi4: created a `"ForwardVertexLit"`
+material from scratch, confirmed the written file/`.meta` GUID exactly matched what the
+Inspector then showed, and the entity's appearance changed live (a purple "missing
+material" ground plane became a properly lit tan surface, no relaunch).
+
+*Phase 5 — Undo/Redo for structural operations.* Create Empty/Create Cube, the
+Hierarchy's "Delete", and every Add/Remove Component button are now fully undoable --
+previously excluded because the same conceptual entity gets a genuinely *new* `Entity`
+handle (different generation) every time it's destroyed and recreated across an undo/redo
+toggle, so a closure capturing a fixed `Entity` by value the way every field-edit closure
+already does would go stale. Fixed with a `std::shared_ptr<Entity>` "cell" shared across a
+whole undo/redo chain for Create/Delete -- every closure reads/writes through the same
+cell, so whichever closure runs next always sees the live handle. A new
+`EntitySnapshot`/`CaptureEntitySnapshot()`/`RestoreEntitySnapshot()` (free functions, not
+capturing lambdas -- see their own comment on why) capture every optional component
+Delete's target had *and* which other entities had their own `TransformComponent::parent`
+pointing at it (Delete already orphans those to root before destroying -- unchanged
+behavior, just now recorded so Undo can re-point them at the recreated entity's new
+handle too). Add/Remove Component's own undo is simpler -- the entity handle never
+changes, so it follows the exact same `[&world, entity = selectedEntity, ...]` capture
+shape every Collider-shape/Light-type combo already uses. Verified on Pi4, each piece
+individually via before/after screenshots: Create Cube → Undo (entity gone, selection
+cleared) → Redo (recreated as `Entity 10.2` -- same index, generation bumped, exactly as
+expected -- and re-selected); Delete on a parent entity with a child → Undo (parent
+resurrected as `Entity 2.2`, child correctly re-nested under it in the Hierarchy tree,
+confirmed via its Inspector "Parent" field) → the child's own Parent field read "None"
+right after the delete, before the undo, confirming the orphan-then-restore round-trip
+both ways; `+ Collider` → Undo (Collider section gone, back to the Add Component row).
+
 See the roadmap doc for what's explicitly deferred to later steps, and
 `docs/07-unity-parity-analysis.md` for what's missing relative to Unity's own editor.

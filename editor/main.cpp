@@ -75,8 +75,10 @@ using engine::renderer::FrameLightingData;
 using engine::renderer::GpuLight;
 using engine::renderer::kMaxLights;
 using engine::renderer::FindMaterialShader;
+using engine::renderer::GetMaterialShaderRegistry;
 using engine::renderer::MaterialData;
 using engine::renderer::MaterialPropertyValue;
+using engine::renderer::MaterialShaderInfo;
 using engine::renderer::MeshData;
 using engine::renderer::ShaderPropertyDecl;
 using engine::renderer::ShaderPropertyType;
@@ -145,6 +147,97 @@ std::string EntityLabel(Entity entity) {
     char buffer[64];
     std::snprintf(buffer, sizeof(buffer), "Entity %u.%u", entity.index, entity.generation);
     return buffer;
+}
+
+// Structural Undo/Redo (post-Editor-E8, "make everything the Editor shows manageable"
+// phase 5, the user's own explicit request) -- Create/Delete Entity's own snapshot of
+// everything needed to recreate an entity exactly as it was: every optional component it
+// had, plus which *other* entities had their own TransformComponent::parent pointing at
+// it (Delete Entity orphans those to root before destroying -- see that code's own
+// comment -- so undoing a delete needs to re-point them at the recreated entity's new
+// handle, not just resurrect it in isolation). A plain data struct plus free functions
+// below, deliberately not a capturing lambda: every undo/redo closure that uses these
+// captures the *function* itself (stateless, nothing per-frame) plus this struct *by
+// value* -- never a reference to a helper that only lives for the current frame. This
+// file's closures only ever capture `world`/`selectedEntity` by reference (both declared
+// once outside the per-frame update lambda, so they outlive any closure that captures
+// them) plus small values by copy, same reasoning TrackFieldEdit's own `resolveField`
+// parameter gives below.
+struct EntitySnapshot {
+    TransformComponent transform;
+    bool hasMesh = false;
+    engine::ecs::MeshComponent mesh;
+    bool hasCollider = false;
+    ColliderComponent collider;
+    bool hasRigidbody = false;
+    engine::ecs::RigidbodyComponent rigidbody;
+    bool hasLight = false;
+    engine::ecs::LightComponent light;
+    // Entities whose own TransformComponent::parent pointed at the captured entity, at
+    // capture time. Re-pointed back at the recreated entity's new handle by
+    // RestoreEntitySnapshot() below; anything no longer alive by the time that actually
+    // runs is silently skipped (its own edits since then have their own independent undo
+    // history -- degrades to a no-op rather than corrupting anything, same precedent
+    // every other stale-Entity-handle case in this file already follows).
+    std::vector<Entity> children;
+};
+
+EntitySnapshot CaptureEntitySnapshot(World& world, Entity entity) {
+    EntitySnapshot snapshot;
+    if (const TransformComponent* transform = world.GetTransform(entity)) {
+        snapshot.transform = *transform;
+    }
+    if (const engine::ecs::MeshComponent* mesh = world.GetMesh(entity)) {
+        snapshot.hasMesh = true;
+        snapshot.mesh = *mesh;
+    }
+    if (const ColliderComponent* collider = world.GetCollider(entity)) {
+        snapshot.hasCollider = true;
+        snapshot.collider = *collider;
+    }
+    if (const engine::ecs::RigidbodyComponent* rigidbody = world.GetRigidbody(entity)) {
+        snapshot.hasRigidbody = true;
+        snapshot.rigidbody = *rigidbody;
+    }
+    if (const engine::ecs::LightComponent* light = world.GetLight(entity)) {
+        snapshot.hasLight = true;
+        snapshot.light = *light;
+    }
+    for (const Entity candidate : world.Transforms().Entities()) {
+        if (candidate == entity) {
+            continue;
+        }
+        const TransformComponent* candidateTransform = world.GetTransform(candidate);
+        if (candidateTransform != nullptr && candidateTransform->parent == entity) {
+            snapshot.children.push_back(candidate);
+        }
+    }
+    return snapshot;
+}
+
+Entity RestoreEntitySnapshot(World& world, const EntitySnapshot& snapshot) {
+    const Entity entity = world.CreateEntity();
+    world.AddTransform(entity, snapshot.transform);
+    if (snapshot.hasMesh) {
+        world.AddMesh(entity, snapshot.mesh);
+    }
+    if (snapshot.hasCollider) {
+        world.AddCollider(entity, snapshot.collider);
+    }
+    if (snapshot.hasRigidbody) {
+        world.AddRigidbody(entity, snapshot.rigidbody);
+    }
+    if (snapshot.hasLight) {
+        world.AddLight(entity, snapshot.light);
+    }
+    for (const Entity child : snapshot.children) {
+        if (world.IsAlive(child)) {
+            if (TransformComponent* childTransform = world.GetTransform(child)) {
+                childTransform->parent = entity;
+            }
+        }
+    }
+    return entity;
 }
 
 // Undo/Redo (post-Editor-E8, docs/07-unity-parity-analysis.md) for a single Inspector
@@ -1052,6 +1145,19 @@ int main(int argc, char** argv) {
     std::string projectHubStatus;
     float projectHubStatusRemainingSeconds = 0.0f;
 
+    // --- "make everything the Editor shows manageable" phase 4 -- New Material, offered
+    //     alongside "Assign Material" in a Mesh's own Material section (a fresh material
+    //     asset needs a shader to target, so `newMaterialShaderIndex` picks one from
+    //     GetMaterialShaderRegistry() by index rather than name -- simplest way to drive
+    //     an ImGui combo over a registry that has no natural "current selection" of its
+    //     own yet). Same fixed-buffer/status-message shape as the Project Hub fields
+    //     above; shared across whichever entity is selected (not per-entity state) since
+    //     only one Inspector is ever visible at a time. ---
+    char newMaterialPathBuffer[512] = "";
+    int newMaterialShaderIndex = 0;
+    std::string newMaterialStatus;
+    float newMaterialStatusRemainingSeconds = 0.0f;
+
     Application::Callbacks callbacks;
 
     callbacks.onUpdate = [&](float deltaSeconds, const engine::platform::InputState& input) {
@@ -1264,23 +1370,46 @@ int main(int argc, char** argv) {
         // below already only ever looks at entities with a Transform, so this alone makes
         // it show up); "Create Cube" additionally adds a MeshComponent pointed at
         // defaultCubeMeshGuid, the one mesh every sample/demo scene already treats as the
-        // default building block. Not pushed onto undoStack -- see this feature's own
-        // README entry (editor/README.md) for why create/destroy stay outside Undo for
-        // this pass, unlike every field-edit/reparent/component add-remove around it.
-        if (ImGui::Button("Create Empty")) {
-            const Entity newEntity = world.CreateEntity();
-            world.AddTransform(newEntity);
+        // default building block.
+        //
+        // Undo (phase 5, the user's own explicit request) -- `entityCell` is a
+        // shared_ptr<Entity>, not a plain captured-by-value Entity, because the *same*
+        // conceptual object gets a genuinely new Entity handle (different generation)
+        // every time it's destroyed and recreated across an undo/redo toggle; every
+        // closure below shares the one cell and reads/writes through it, so a later
+        // closure in the stack always sees whichever handle is actually live right now.
+        // RestoreEntitySnapshot() is reused for both the *initial* creation and every
+        // subsequent redo -- there's only one code path that creates this kind of entity,
+        // not two that could drift apart.
+        auto createEntityWithUndo = [&](const EntitySnapshot& snapshot) {
+            const Entity newEntity = RestoreEntitySnapshot(world, snapshot);
             selectedEntity = newEntity;
+            auto entityCell = std::make_shared<Entity>(newEntity);
+            undoStack.Push(
+                [&world, &selectedEntity, entityCell]() {
+                    if (world.IsAlive(*entityCell)) {
+                        world.DestroyEntity(*entityCell);
+                    }
+                    if (selectedEntity == *entityCell) {
+                        selectedEntity = engine::ecs::kInvalidEntity;
+                    }
+                },
+                [&world, &selectedEntity, entityCell, snapshot]() {
+                    *entityCell = RestoreEntitySnapshot(world, snapshot);
+                    selectedEntity = *entityCell;
+                });
+        };
+
+        if (ImGui::Button("Create Empty")) {
+            createEntityWithUndo(EntitySnapshot{});
         }
         ImGui::SameLine();
         if (ImGui::Button("Create Cube")) {
-            const Entity newEntity = world.CreateEntity();
-            world.AddTransform(newEntity);
-            engine::ecs::MeshComponent mesh;
-            mesh.meshGuid = defaultCubeMeshGuid;
-            mesh.boundsRadius = 0.87f; // matches every other cube instance's own value.
-            world.AddMesh(newEntity, mesh);
-            selectedEntity = newEntity;
+            EntitySnapshot snapshot;
+            snapshot.hasMesh = true;
+            snapshot.mesh.meshGuid = defaultCubeMeshGuid;
+            snapshot.mesh.boundsRadius = 0.87f; // matches every other cube instance's own value.
+            createEntityWithUndo(snapshot);
         }
 
         const auto& sceneEntities = world.Transforms().Entities();
@@ -1335,25 +1464,55 @@ int main(int argc, char** argv) {
         renderEntityNode(engine::ecs::kInvalidEntity, 0);
 
         if (entityPendingDelete != engine::ecs::kInvalidEntity) {
+            // Snapshot before touching anything -- CaptureEntitySnapshot() records every
+            // component this entity has *and* which other entities have their own
+            // TransformComponent::parent pointing at it, so Undo (phase 5, the user's own
+            // explicit request) can fully resurrect both the entity and that hierarchy
+            // relationship, not just the entity in isolation.
+            const EntitySnapshot snapshot = CaptureEntitySnapshot(world, entityPendingDelete);
+
             // Orphan any children rather than cascade-deleting them -- World::DestroyEntity()
             // itself doesn't touch other entities' TransformComponent::parent (documented
             // gap), so this Editor-level fix-up is what keeps a child from being left
             // pointing at a now-dead handle. Same "missing parent degrades to root" spirit
-            // SpawnEntities() already applies to an out-of-range parentIndex.
-            for (const Entity candidate : sceneEntities) {
-                if (candidate == entityPendingDelete) {
-                    continue;
-                }
-                TransformComponent* candidateTransform = world.GetTransform(candidate);
-                if (candidateTransform != nullptr &&
-                    candidateTransform->parent == entityPendingDelete) {
-                    candidateTransform->parent = engine::ecs::kInvalidEntity;
+            // SpawnEntities() already applies to an out-of-range parentIndex. `snapshot.
+            // children` already recorded exactly which entities these are.
+            for (const Entity child : snapshot.children) {
+                if (TransformComponent* childTransform = world.GetTransform(child)) {
+                    childTransform->parent = engine::ecs::kInvalidEntity;
                 }
             }
             if (selectedEntity == entityPendingDelete) {
                 selectedEntity = engine::ecs::kInvalidEntity;
             }
             world.DestroyEntity(entityPendingDelete);
+
+            // Same shared-cell reasoning as createEntityWithUndo() above -- the entity
+            // this delete resurrects on Undo gets a genuinely new handle each time, so
+            // every closure below shares one cell rather than each capturing a fixed
+            // Entity value.
+            auto entityCell = std::make_shared<Entity>(engine::ecs::kInvalidEntity);
+            undoStack.Push(
+                [&world, &selectedEntity, entityCell, snapshot]() {
+                    *entityCell = RestoreEntitySnapshot(world, snapshot);
+                    selectedEntity = *entityCell;
+                },
+                [&world, &selectedEntity, entityCell, snapshot]() {
+                    for (const Entity child : snapshot.children) {
+                        if (world.IsAlive(child)) {
+                            if (TransformComponent* childTransform =
+                                    world.GetTransform(child)) {
+                                childTransform->parent = engine::ecs::kInvalidEntity;
+                            }
+                        }
+                    }
+                    if (world.IsAlive(*entityCell)) {
+                        world.DestroyEntity(*entityCell);
+                    }
+                    if (selectedEntity == *entityCell) {
+                        selectedEntity = engine::ecs::kInvalidEntity;
+                    }
+                });
         }
         ImGui::End();
 
@@ -1569,28 +1728,142 @@ int main(int argc, char** argv) {
                             mesh->materialGuid = engine::asset::kInvalidAssetGuid;
                         }
                     }
-                } else if (!materialGuidToPath.empty()) {
+                } else {
                     // Assign Material (post-Editor-E8, "make everything the Editor shows
                     // manageable") -- a Mesh with no material yet gets a picker over every
                     // *.material.json under assets/, same combo shape as the Texture
-                    // property's own asset picker above. Only shown when at least one
-                    // material asset actually exists to pick from.
+                    // property's own asset picker above, plus (phase 4, the user's own
+                    // explicit request) a "New Material" action right below it for when
+                    // nothing suitable exists yet -- always shown now (used to be gated on
+                    // materialGuidToPath being non-empty), since "New Material" has to work
+                    // from zero existing materials too, the bootstrap case.
                     if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
-                        if (ImGui::BeginCombo("Assign Material", "(none)")) {
-                            for (const auto& [matGuid, matPath] : materialGuidToPath) {
-                                const std::string label =
-                                    std::filesystem::path(matPath).filename().string();
-                                if (ImGui::Selectable(label.c_str())) {
-                                    mesh->materialGuid = matGuid;
+                        if (!materialGuidToPath.empty()) {
+                            if (ImGui::BeginCombo("Assign Material", "(none)")) {
+                                for (const auto& [matGuid, matPath] : materialGuidToPath) {
+                                    const std::string label =
+                                        std::filesystem::path(matPath).filename().string();
+                                    if (ImGui::Selectable(label.c_str())) {
+                                        mesh->materialGuid = matGuid;
+                                    }
                                 }
+                                ImGui::EndCombo();
                             }
-                            ImGui::EndCombo();
+                        } else {
+                            ImGui::TextDisabled("(no material assets yet)");
+                        }
+
+                        // New Material -- writes a fresh .material.json (default property
+                        // values straight from the chosen shader's own schema,
+                        // EnsureMaterialProperty()'s same fallback-filling logic the
+                        // property-editing loop above already uses) + a brand-new .meta
+                        // GUID sidecar (engine::asset::GenerateAndWriteAssetMetaGuid() --
+                        // that header's own comment explains why materials are the one
+                        // asset kind the Editor itself has to assign a GUID for, since
+                        // they're never cooked), then assigns it to this Mesh immediately
+                        // -- no relaunch needed, unlike Project Hub's scene-level New/Open
+                        // above, since this only adds an entry to the *live* process's own
+                        // materialGuidToPath/resolveMaterial caches, not a different scene.
+                        ImGui::Separator();
+                        ImGui::TextUnformatted("New Material");
+                        const auto& materialShaderRegistry = GetMaterialShaderRegistry();
+                        if (!materialShaderRegistry.empty()) {
+                            if (newMaterialShaderIndex < 0 ||
+                                static_cast<std::size_t>(newMaterialShaderIndex) >=
+                                    materialShaderRegistry.size()) {
+                                newMaterialShaderIndex = 0;
+                            }
+                            if (ImGui::BeginCombo(
+                                    "Shader",
+                                    materialShaderRegistry[static_cast<std::size_t>(
+                                                                newMaterialShaderIndex)]
+                                        .name.c_str())) {
+                                for (std::size_t i = 0; i < materialShaderRegistry.size(); ++i) {
+                                    const bool isSelected =
+                                        static_cast<int>(i) == newMaterialShaderIndex;
+                                    if (ImGui::Selectable(materialShaderRegistry[i].name.c_str(),
+                                                          isSelected)) {
+                                        newMaterialShaderIndex = static_cast<int>(i);
+                                    }
+                                }
+                                ImGui::EndCombo();
+                            }
+                            ImGui::SetNextItemWidth(-80.0f);
+                            ImGui::InputTextWithHint("##NewMaterialPath",
+                                                     "path/to/new_material.material.json",
+                                                     newMaterialPathBuffer,
+                                                     sizeof(newMaterialPathBuffer));
+                            ImGui::SameLine();
+                            if (ImGui::Button("Create##NewMaterial")) {
+                                const std::string path = newMaterialPathBuffer;
+                                const MaterialShaderInfo& shaderInfo =
+                                    materialShaderRegistry[static_cast<std::size_t>(
+                                        newMaterialShaderIndex)];
+                                std::error_code existsError;
+                                if (path.empty()) {
+                                    newMaterialStatus = "Enter a path first.";
+                                } else if (std::filesystem::exists(path, existsError)) {
+                                    newMaterialStatus = "Already exists -- pick a different path.";
+                                } else {
+                                    MaterialData material;
+                                    material.shaderName = shaderInfo.name;
+                                    for (const ShaderPropertyDecl& decl : shaderInfo.properties) {
+                                        EnsureMaterialProperty(material, decl);
+                                    }
+                                    const std::filesystem::path fsPath(path);
+                                    std::error_code dirError;
+                                    if (fsPath.has_parent_path()) {
+                                        std::filesystem::create_directories(
+                                            fsPath.parent_path(), dirError);
+                                    }
+                                    AssetGuid newGuid;
+                                    if (dirError) {
+                                        newMaterialStatus =
+                                            "Failed to create directory -- see stderr.";
+                                    } else if (!engine::renderer::WriteMaterial(path.c_str(),
+                                                                                material)) {
+                                        newMaterialStatus = "Write failed -- see stderr.";
+                                    } else if (!engine::asset::GenerateAndWriteAssetMetaGuid(
+                                                   path.c_str(), newGuid)) {
+                                        newMaterialStatus = "Wrote material, but GUID "
+                                                            "assignment failed -- see stderr.";
+                                    } else {
+                                        materialGuidToPath.emplace(newGuid, path);
+                                        mesh->materialGuid = newGuid;
+                                        newMaterialStatus = "Created.";
+                                        newMaterialPathBuffer[0] = '\0';
+                                    }
+                                }
+                                newMaterialStatusRemainingSeconds = 3.0f;
+                            }
+                            if (newMaterialStatusRemainingSeconds > 0.0f) {
+                                newMaterialStatusRemainingSeconds -= deltaSeconds;
+                                ImGui::TextUnformatted(newMaterialStatus.c_str());
+                            }
                         }
                     }
                 }
             }
             if (removeMeshRequested) {
-                world.RemoveMesh(selectedEntity);
+                // Snapshot before removing (phase 5 Undo, the user's own explicit
+                // request) -- still safe to read here, deferred to exactly this point for
+                // the same reason removal itself is (this file's own comment above where
+                // removeMeshRequested is set).
+                if (const engine::ecs::MeshComponent* meshToRemove = world.GetMesh(selectedEntity)) {
+                    const engine::ecs::MeshComponent removedMesh = *meshToRemove;
+                    world.RemoveMesh(selectedEntity);
+                    undoStack.Push(
+                        [&world, entity = selectedEntity, removedMesh]() {
+                            if (world.IsAlive(entity) && !world.HasMesh(entity)) {
+                                world.AddMesh(entity, removedMesh);
+                            }
+                        },
+                        [&world, entity = selectedEntity]() {
+                            if (world.IsAlive(entity)) {
+                                world.RemoveMesh(entity);
+                            }
+                        });
+                }
             }
             if (ColliderComponent* collider = world.GetCollider(selectedEntity)) {
                 if (ImGui::CollapsingHeader("Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1652,7 +1925,19 @@ int main(int argc, char** argv) {
                                        return c != nullptr ? &c->isTrigger : nullptr;
                                    });
                     if (ImGui::Button("Remove Collider")) {
+                        const ColliderComponent removedCollider = *collider;
                         world.RemoveCollider(selectedEntity);
+                        undoStack.Push(
+                            [&world, entity = selectedEntity, removedCollider]() {
+                                if (world.IsAlive(entity) && !world.HasCollider(entity)) {
+                                    world.AddCollider(entity, removedCollider);
+                                }
+                            },
+                            [&world, entity = selectedEntity]() {
+                                if (world.IsAlive(entity)) {
+                                    world.RemoveCollider(entity);
+                                }
+                            });
                     }
                 }
             }
@@ -1679,7 +1964,19 @@ int main(int argc, char** argv) {
                                        return r != nullptr ? &r->mass : nullptr;
                                    });
                     if (ImGui::Button("Remove Rigidbody")) {
+                        const engine::ecs::RigidbodyComponent removedRigidbody = *rigidbody;
                         world.RemoveRigidbody(selectedEntity);
+                        undoStack.Push(
+                            [&world, entity = selectedEntity, removedRigidbody]() {
+                                if (world.IsAlive(entity) && !world.HasRigidbody(entity)) {
+                                    world.AddRigidbody(entity, removedRigidbody);
+                                }
+                            },
+                            [&world, entity = selectedEntity]() {
+                                if (world.IsAlive(entity)) {
+                                    world.RemoveRigidbody(entity);
+                                }
+                            });
                     }
                 }
             }
@@ -1758,18 +2055,29 @@ int main(int argc, char** argv) {
                                    });
 
                     if (ImGui::Button("Remove Light")) {
+                        const engine::ecs::LightComponent removedLight = *light;
                         world.RemoveLight(selectedEntity);
+                        undoStack.Push(
+                            [&world, entity = selectedEntity, removedLight]() {
+                                if (world.IsAlive(entity) && !world.HasLight(entity)) {
+                                    world.AddLight(entity, removedLight);
+                                }
+                            },
+                            [&world, entity = selectedEntity]() {
+                                if (world.IsAlive(entity)) {
+                                    world.RemoveLight(entity);
+                                }
+                            });
                     }
                 }
             }
 
             // Add Component (post-Editor-E8, "make everything the Editor shows
             // manageable") -- only offers a component type the entity doesn't already
-            // have. Not pushed onto undoStack, same accepted-gap reasoning as Create/
-            // Delete Entity above (editor/README.md has the full note). Material isn't
-            // listed here -- it's a property of MeshComponent (materialGuid), not its own
-            // ECS component, so it's assigned from the Mesh section above instead (only
-            // meaningful once an entity already has a Mesh to attach it to).
+            // have. Material isn't listed here -- it's a property of MeshComponent
+            // (materialGuid), not its own ECS component, so it's assigned from the Mesh
+            // section above instead (only meaningful once an entity already has a Mesh to
+            // attach it to).
             if (!world.HasMesh(selectedEntity) || !world.HasCollider(selectedEntity) ||
                 !world.HasRigidbody(selectedEntity) || !world.HasLight(selectedEntity)) {
                 ImGui::Separator();
@@ -1793,13 +2101,60 @@ int main(int argc, char** argv) {
                     mesh.meshGuid = defaultCubeMeshGuid;
                     mesh.boundsRadius = 0.87f;
                     world.AddMesh(selectedEntity, mesh);
+                    undoStack.Push(
+                        [&world, entity = selectedEntity]() {
+                            if (world.IsAlive(entity)) {
+                                world.RemoveMesh(entity);
+                            }
+                        },
+                        [&world, entity = selectedEntity, mesh]() {
+                            if (world.IsAlive(entity) && !world.HasMesh(entity)) {
+                                world.AddMesh(entity, mesh);
+                            }
+                        });
                 });
-                addComponentButton("+ Collider", world.HasCollider(selectedEntity),
-                                   [&]() { world.AddCollider(selectedEntity); });
-                addComponentButton("+ Rigidbody", world.HasRigidbody(selectedEntity),
-                                   [&]() { world.AddRigidbody(selectedEntity); });
-                addComponentButton("+ Light", world.HasLight(selectedEntity),
-                                   [&]() { world.AddLight(selectedEntity); });
+                addComponentButton("+ Collider", world.HasCollider(selectedEntity), [&]() {
+                    world.AddCollider(selectedEntity);
+                    undoStack.Push(
+                        [&world, entity = selectedEntity]() {
+                            if (world.IsAlive(entity)) {
+                                world.RemoveCollider(entity);
+                            }
+                        },
+                        [&world, entity = selectedEntity]() {
+                            if (world.IsAlive(entity) && !world.HasCollider(entity)) {
+                                world.AddCollider(entity);
+                            }
+                        });
+                });
+                addComponentButton("+ Rigidbody", world.HasRigidbody(selectedEntity), [&]() {
+                    world.AddRigidbody(selectedEntity);
+                    undoStack.Push(
+                        [&world, entity = selectedEntity]() {
+                            if (world.IsAlive(entity)) {
+                                world.RemoveRigidbody(entity);
+                            }
+                        },
+                        [&world, entity = selectedEntity]() {
+                            if (world.IsAlive(entity) && !world.HasRigidbody(entity)) {
+                                world.AddRigidbody(entity);
+                            }
+                        });
+                });
+                addComponentButton("+ Light", world.HasLight(selectedEntity), [&]() {
+                    world.AddLight(selectedEntity);
+                    undoStack.Push(
+                        [&world, entity = selectedEntity]() {
+                            if (world.IsAlive(entity)) {
+                                world.RemoveLight(entity);
+                            }
+                        },
+                        [&world, entity = selectedEntity]() {
+                            if (world.IsAlive(entity) && !world.HasLight(entity)) {
+                                world.AddLight(entity);
+                            }
+                        });
+                });
             }
         } else {
             ImGui::TextUnformatted("No entity selected -- click one in the Hierarchy panel.");

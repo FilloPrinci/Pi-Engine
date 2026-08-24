@@ -80,7 +80,11 @@ property of the Mesh, not its own component. The Collider section's shape is now
 Box/Sphere switch (not read-only text), and Rigidbody gained an "Is Static" checkbox
 backed by a real `isStatic` field on the component itself — previously read once and
 discarded, so saving a scene with a Rigidbody used to silently drop it entirely; it now
-round-trips like everything else.
+round-trips like everything else. A Mesh with no material can also create a brand-new
+material asset on the spot (pick a shader, a file path, "Create") instead of only picking
+an existing one, and Create/Delete Entity plus every Add/Remove Component action are now
+fully undoable, including a deleted entity's children being correctly re-parented back on
+Undo — the last two gaps this feature area had.
 
 **Lighting**: docs/01 section 8.3's "Low-Poly Retro" profile now has a first real
 implementation — a `LightComponent` (Directional or Point, up to 4 simultaneous, matching

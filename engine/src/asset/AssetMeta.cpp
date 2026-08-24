@@ -28,4 +28,24 @@ bool TryReadAssetMetaGuid(const char* sourcePath, AssetGuid& outGuid) {
     return false;
 }
 
+bool GenerateAndWriteAssetMetaGuid(const char* sourcePath, AssetGuid& outGuid) {
+    const AssetGuid guid = GenerateAssetGuid();
+    const std::string metaPath = std::string(sourcePath) + ".meta";
+
+    std::ofstream out(metaPath);
+    if (!out.is_open()) {
+        return false;
+    }
+
+    nlohmann::json json;
+    json["guid"] = ToString(guid);
+    out << json.dump(2) << '\n';
+    if (!out) {
+        return false;
+    }
+
+    outGuid = guid;
+    return true;
+}
+
 } // namespace engine::asset

@@ -26,8 +26,11 @@ struct AssetGuid {
 inline constexpr AssetGuid kInvalidAssetGuid{};
 
 // Random 128-bit id (see the struct's own comment for why not a "real" UUID). Called by
-// tools/cooker the first time it sees a source asset with no sidecar .meta file yet --
-// never at runtime, the engine only ever reads GUIDs back out of already-cooked output.
+// tools/cooker the first time it sees a source asset with no sidecar .meta file yet, for
+// every cooked asset kind -- the engine only ever reads *those* GUIDs back out of
+// already-cooked output, never generates its own. The one exception: material assets are
+// never cooked at all (MaterialData.h's own comment), so the Editor calls this directly
+// (via AssetMeta.h's GenerateAndWriteAssetMetaGuid()) when creating a brand-new material.
 AssetGuid GenerateAssetGuid();
 
 // 32 lowercase hex digits, no dashes ("a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4") -- simple to

@@ -31,6 +31,12 @@ namespace engine::renderer {
 // already established: switching a material between the two means retargeting its
 // shaderName, not toggling a flag on one shared shader).
 //
+// Lighting phase B: set = 0 also carries the static shadow map's comparison sampler
+// (binding = 1, alongside the FrameLightingData UBO at binding = 0) -- this pipeline's own
+// shadow lookup happens per-*vertex* (matching its per-vertex lighting), unlike
+// ForwardLitShadedPipeline's per-fragment one, but the binding itself still declares both
+// stages (this class's own .cpp comment explains why that matters).
+//
 // Expects `engine::renderer::Vertex` (MeshLoader.h: position + normal), same as
 // ForwardLitShadedPipeline. Per-draw push constant is a model matrix (not a precomputed
 // MVP -- the frame UBO's viewProj covers that, same reasoning as

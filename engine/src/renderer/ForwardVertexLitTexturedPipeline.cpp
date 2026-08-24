@@ -59,7 +59,18 @@ bool ForwardVertexLitTexturedPipeline::Init(rhi::RHIContext& context, VkRenderPa
     frameDataBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     frameDataBinding.descriptorCount = 1;
     frameDataBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    desc.descriptorSetLayoutBindings = {frameDataBinding};
+
+    // Lighting phase B -- the static shadow map's comparison sampler, same set = 0 as the
+    // frame UBO above, identically defined (both stages declared) across all three lit
+    // pipelines for the same cross-pipeline VkDescriptorSet-sharing reason
+    // ForwardVertexLitPipeline's own comment on this exact binding explains.
+    VkDescriptorSetLayoutBinding shadowMapBinding{};
+    shadowMapBinding.binding = 1;
+    shadowMapBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    shadowMapBinding.descriptorCount = 1;
+    shadowMapBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    desc.descriptorSetLayoutBindings = {frameDataBinding, shadowMapBinding};
 
     // set = 1 -- identical shape to ForwardLitTexturedColorPipeline's own single binding
     // (this class's own header comment explains why that matters).

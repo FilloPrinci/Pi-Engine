@@ -75,9 +75,11 @@ add_library(engine_core STATIC
     src/renderer/MaterialData.cpp
     src/renderer/MeshLoader.cpp
     src/renderer/ShaderPropertySchema.cpp
+    src/renderer/ShadowDepthPipeline.cpp
     src/rhi/RHIBuffer.cpp
     src/rhi/RHIContext.cpp
     src/rhi/RHIPipeline.cpp
+    src/rhi/RHIShadowMap.cpp
     src/rhi/RHISwapchain.cpp
     src/rhi/RHITexture.cpp
     src/rhi/VmaImplementation.cpp

@@ -127,6 +127,35 @@
   target `"ForwardVertexLit"` instead rather than leaving `albedoTexture` empty (same
   "switch shaderName, don't toggle a flag" convention every texture/no-texture shader pair
   in this registry follows).
+- `ShadowDepthPipeline.h` + `.cpp` -- done (lighting phase B, docs/01 section 8.3's
+  "preferably baked" static shadow map, directional-only for now): an eighth separate
+  concrete pipeline class, depth-only (no color attachment at all, matching
+  `rhi::RHIShadowMap`'s own depth-only render pass) -- renders scene geometry from the
+  shadow-casting light's own view-projection instead of the camera's, into
+  `RHIShadowMap`'s depth target. No descriptor sets, a single `mat4 mvp` push constant
+  (the light's view-projection combined with the entity's model matrix on the CPU, since
+  there's no per-frame UBO to split it out of the way the three lit pipelines' own
+  `viewProj` is). Not a material-backed shader -- `ShaderPropertySchema.h` has no entry
+  for it, since a shadow bake pass isn't something a material ever targets, it's driven
+  entirely by `editor/main.cpp`'s own bake code iterating every mesh entity once at load
+  time. See `rhi/README.md`'s `RHIShadowMap` entry for the full design (why it's baked
+  once rather than per-frame, the comparison-sampler/hardware-PCF choice, and an analysis
+  of what a future point-light cube-map variant would need).
 
-Seven concrete pipeline classes so far, never an uber-shader with branching (CLAUDE.md
+  All three lit pipelines (`ForwardLitShadedPipeline`/`ForwardVertexLitPipeline`/
+  `ForwardVertexLitTexturedPipeline`) gained a second binding in their shared set = 0 (the
+  shadow map's own comparison sampler, `sampler2DShadow`, alongside the `FrameLightingData`
+  UBO) -- identically defined across all three (same binding index/type/stage flags) so
+  the one already-shared frame descriptor set keeps covering all three, no new allocation.
+  `ForwardLitShadedPipeline` samples it per-*fragment* (matching its own per-fragment
+  lighting); `ForwardVertexLitPipeline`/`ForwardVertexLitTexturedPipeline` sample it
+  per-*vertex* instead (`textureLod()`, not `texture()` -- implicit-LOD sampling needs
+  fragment-stage derivatives that don't exist in a vertex shader), matching their own
+  per-vertex lighting. `FrameLightingData` grew a `lightViewProj` field (the baked light's
+  own view-projection) plus repurposed `cameraWorldPosition.w` (previously unused) to
+  carry which light index within that frame's own `lights[]` array is the shadow caster,
+  or -1 if none qualifies -- every *other* light in the scene stays completely unshadowed,
+  matching this phase's directional-only, one-baked-light scope.
+
+Eight concrete pipeline classes so far, never an uber-shader with branching (CLAUDE.md
 rule 7).

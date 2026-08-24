@@ -144,9 +144,15 @@ a fixed sequence up front.
 - `SDL2DisplayBackend` only through M7 so far — `DirectDRMDisplayBackend` comes later, didn't block the vertical slice.
 - Lighting: phase A done (docs/01 section 8.3's "Low-Poly Retro" profile) — `LightComponent`
   (Directional/Point, up to 4 simultaneous, docs/01's own indicative budget),
-  `ForwardLitShadedPipeline` (minimal Blinn-Phong, no PBR), a per-frame lighting UBO. No
-  shadows yet (a static-only shadow map, docs/01's "preferably baked" guidance, is phase B,
-  not started).
+  `ForwardLitShadedPipeline` (minimal Blinn-Phong, no PBR), a per-frame lighting UBO; its
+  follow-up added `ForwardVertexLitPipeline`/`ForwardVertexLitTexturedPipeline` (the same
+  lighting per-vertex instead, now the engine's default/base material) and a flat purple
+  "missing material" indicator for a Mesh with none assigned. Phase B done too, directional
+  lights only — a static shadow map (docs/01's "preferably baked" guidance): `rhi::RHIShadowMap`
+  (this project's first render-to-texture RHI resource) + `renderer::ShadowDepthPipeline`
+  bake once, at load time, from the first `Directional` + `isStatic` + `castsShadow` light
+  found; all three lit pipelines sample it. A point-light cube-map variant is analyzed
+  (`engine/include/engine/rhi/README.md`) but not built.
 
 **Explicitly out of scope still** (already designed in docs/01, not started): Audio (deferred at the user's request — not currently testable), gamepad, bloom/post-processing, PBR profile, per-hardware-profile output (Hardware Profile System), Networking.
 

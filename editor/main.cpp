@@ -21,8 +21,10 @@
 #include "engine/renderer/ForwardVertexLitTexturedPipeline.h"
 #include "engine/renderer/MaterialData.h"
 #include "engine/renderer/ShaderPropertySchema.h"
+#include "engine/renderer/ShadowDepthPipeline.h"
 #include "engine/rhi/RHIBuffer.h"
 #include "engine/rhi/RHIContext.h"
+#include "engine/rhi/RHIShadowMap.h"
 #include "engine/rhi/RHISwapchain.h"
 #include "engine/rhi/RHITexture.h"
 #include "engine/scene/Scene.h"
@@ -34,6 +36,10 @@
 // manually drag every panel into place on first run -- the standard pattern used by every
 // ImGui-based tool that ships a default docked layout (ImGui's own demo included).
 #include <imgui_internal.h>
+// glm::lookAt/glm::ortho (lighting phase B's shadow-caster view-projection) -- not pulled
+// in transitively by any engine header this file already includes (Camera.h only uses
+// these internally, in Camera.cpp, not in its own public API).
+#include <glm/gtc/matrix_transform.hpp>
 #include <volk.h>
 
 #include <algorithm>
@@ -82,6 +88,8 @@ using engine::renderer::MaterialShaderInfo;
 using engine::renderer::MeshData;
 using engine::renderer::ShaderPropertyDecl;
 using engine::renderer::ShaderPropertyType;
+using engine::renderer::ShadowDepthPipeline;
+using engine::rhi::RHIShadowMap;
 using engine::rhi::RHITexture;
 using engine::rhi::RHIBuffer;
 using engine::rhi::RHIContext;
@@ -807,6 +815,163 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    // --- Lighting phase B (docs/01 section 8.3's "preferably baked" static shadow map,
+    //     the user's own explicit request -- directional lights only for now, see
+    //     RHIShadowMap.h's own comment on why a point light would need a cube map
+    //     instead) -- an eighth separate concrete pipeline (CLAUDE.md rule 7) for the
+    //     depth-only bake pass, plus the render-to-texture target it renders into. Baked
+    //     once, synchronously, right here at load time (RHIShadowMap.h's own comment on
+    //     why a one-off command buffer + vkQueueWaitIdle() is correct for a load-time-only
+    //     resource) -- not re-baked per frame, and not re-baked if the scene changes
+    //     afterward (a manual "Rebake Shadows" trigger is a natural, not-yet-built
+    //     follow-up, same as lighting-phase-a's own memory already flagged). ---
+    constexpr std::uint32_t kShadowMapResolution = 1024;
+    RHIShadowMap shadowMap;
+    if (!shadowMap.Init(context, kShadowMapResolution)) {
+        return EXIT_FAILURE;
+    }
+
+    ShadowDepthPipeline shadowDepthPipeline;
+    if (!shadowDepthPipeline.Init(context, shadowMap.GetRenderPass(), shadowMap.GetExtent(),
+                                  ShaderPath("m_shadow_depth.vert.spv").c_str(),
+                                  ShaderPath("m_shadow_depth.frag.spv").c_str())) {
+        return EXIT_FAILURE;
+    }
+
+    // The shadow-casting light -- the first Directional light found that's both
+    // isStatic and castsShadow (LightComponent.h's own hint flags; phase A left these as
+    // hints only, phase B is the first thing that actually enforces castsShadow).
+    // kInvalidEntity if none qualifies -- the bake below still runs (clearing the shadow
+    // map to "far", i.e. "nothing is ever shadowed") so every lit pipeline's shadow
+    // lookup stays well-defined either way, never sampling undefined memory.
+    Entity shadowCasterLightEntity = engine::ecs::kInvalidEntity;
+    glm::mat4 bakedLightViewProj(1.0f);
+    {
+        const auto& lights = world.Lights().Data();
+        const auto& lightEntities = world.Lights().Entities();
+        for (std::size_t i = 0; i < lights.size(); ++i) {
+            if (lights[i].type == engine::ecs::LightComponent::Type::Directional &&
+                lights[i].isStatic && lights[i].castsShadow) {
+                shadowCasterLightEntity = lightEntities[i];
+                break;
+            }
+        }
+    }
+
+    if (shadowCasterLightEntity != engine::ecs::kInvalidEntity) {
+        // Fixed orthographic frustum centered on the world origin -- not fitted to the
+        // scene's actual bounds (a v1 simplification, same "small, fixed, revisit if it
+        // ever matters" reasoning as this Editor's other fixed-size allocations). Wide
+        // enough to comfortably cover this project's own demo scenes.
+        constexpr float kShadowHalfExtent = 20.0f;
+        constexpr float kShadowNear = 0.1f;
+        constexpr float kShadowFar = 60.0f;
+        constexpr float kShadowDistance = 30.0f;
+
+        const glm::mat4 lightWorld = world.GetWorldMatrix(shadowCasterLightEntity);
+        // Local forward is -Z (this project's own directional-light convention,
+        // ForwardLitShadedPipeline.h's own comment).
+        const glm::vec3 lightForward =
+            glm::normalize(glm::mat3(lightWorld) * glm::vec3(0.0f, 0.0f, -1.0f));
+        // glm::lookAt needs a concrete eye position even though only the *direction*
+        // matters for a directional light -- placed far enough back along -lightForward
+        // to keep the whole fixed frustum in front of it.
+        const glm::vec3 eye = -lightForward * kShadowDistance;
+        // Guard against lightForward nearly parallel to the "up" hint (a light pointing
+        // straight down/up would otherwise make glm::lookAt's own cross product
+        // degenerate).
+        glm::vec3 up(0.0f, 1.0f, 0.0f);
+        if (std::abs(glm::dot(lightForward, up)) > 0.999f) {
+            up = glm::vec3(0.0f, 0.0f, 1.0f);
+        }
+        const glm::mat4 lightView = glm::lookAt(eye, eye + lightForward, up);
+        glm::mat4 lightProj = glm::ortho(-kShadowHalfExtent, kShadowHalfExtent,
+                                         -kShadowHalfExtent, kShadowHalfExtent, kShadowNear,
+                                         kShadowFar);
+        lightProj[1][1] *= -1.0f; // Vulkan Y-flip, same convention Camera::GetProjectionMatrix()
+                                  // uses.
+        bakedLightViewProj = lightProj * lightView;
+    }
+
+    // One-off command buffer, submitted and waited on synchronously -- a load-time-only
+    // path, same pattern RHITexture's own upload path already uses.
+    {
+        VkCommandPoolCreateInfo poolInfo{};
+        poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        poolInfo.queueFamilyIndex = context.GetGraphicsQueueFamily();
+
+        VkCommandPool transientPool = VK_NULL_HANDLE;
+        if (vkCreateCommandPool(device, &poolInfo, nullptr, &transientPool) != VK_SUCCESS) {
+            std::fprintf(stderr, "editor: vkCreateCommandPool (shadow bake) failed\n");
+            return EXIT_FAILURE;
+        }
+
+        VkCommandBufferAllocateInfo cmdAllocInfo{};
+        cmdAllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cmdAllocInfo.commandPool = transientPool;
+        cmdAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cmdAllocInfo.commandBufferCount = 1;
+
+        VkCommandBuffer bakeCmd = VK_NULL_HANDLE;
+        vkAllocateCommandBuffers(device, &cmdAllocInfo, &bakeCmd);
+
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(bakeCmd, &beginInfo);
+
+        VkClearValue shadowClear{};
+        shadowClear.depthStencil = {1.0f, 0};
+
+        VkRenderPassBeginInfo shadowPassBeginInfo{};
+        shadowPassBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        shadowPassBeginInfo.renderPass = shadowMap.GetRenderPass();
+        shadowPassBeginInfo.framebuffer = shadowMap.GetFramebuffer();
+        shadowPassBeginInfo.renderArea.offset = {0, 0};
+        shadowPassBeginInfo.renderArea.extent = shadowMap.GetExtent();
+        shadowPassBeginInfo.clearValueCount = 1;
+        shadowPassBeginInfo.pClearValues = &shadowClear;
+
+        vkCmdBeginRenderPass(bakeCmd, &shadowPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+        if (shadowCasterLightEntity != engine::ecs::kInvalidEntity) {
+            shadowDepthPipeline.Bind(bakeCmd);
+            const auto& shadowMeshes = world.Meshes().Data();
+            const auto& shadowMeshEntities = world.Meshes().Entities();
+            for (std::size_t i = 0; i < shadowMeshes.size(); ++i) {
+                if (world.GetTransform(shadowMeshEntities[i]) == nullptr) {
+                    continue;
+                }
+                MeshGpuData* gpuData = resolveMesh(shadowMeshes[i].meshGuid);
+                if (gpuData == nullptr) {
+                    continue;
+                }
+                VkBuffer vertexBuffers[] = {gpuData->vertexBuffer.GetHandle()};
+                VkDeviceSize offsets[] = {0};
+                vkCmdBindVertexBuffers(bakeCmd, 0, 1, vertexBuffers, offsets);
+                vkCmdBindIndexBuffer(bakeCmd, gpuData->indexBuffer.GetHandle(), 0,
+                                     VK_INDEX_TYPE_UINT32);
+                const glm::mat4 mvp =
+                    bakedLightViewProj * world.GetWorldMatrix(shadowMeshEntities[i]);
+                shadowDepthPipeline.PushMvp(bakeCmd, mvp);
+                vkCmdDrawIndexed(bakeCmd, gpuData->indexCount, 1, 0, 0, 0);
+            }
+        }
+
+        vkCmdEndRenderPass(bakeCmd);
+        vkEndCommandBuffer(bakeCmd);
+
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &bakeCmd;
+        vkQueueSubmit(context.GetGraphicsQueue(), 1, &submitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(context.GetGraphicsQueue());
+
+        vkDestroyCommandPool(device, transientPool, nullptr); // also frees `bakeCmd`.
+    }
+
     // --- Frame lighting UBO (FrameLightingData, ForwardLitShadedPipeline.h's own comment
     //     for why this is a UBO and not a push constant) -- one buffer + one descriptor
     //     set *per frame-in-flight* (kMaxFramesInFlight, same index as every other
@@ -829,15 +994,22 @@ int main(int argc, char** argv) {
         }
     }
 
-    VkDescriptorPoolSize frameLightingPoolSize{};
-    frameLightingPoolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    frameLightingPoolSize.descriptorCount = kMaxFramesInFlight;
+    // Two pool size entries now (lighting phase B) -- one UNIFORM_BUFFER (binding 0, the
+    // per-frame-in-flight UBO) and one COMBINED_IMAGE_SAMPLER (binding 1, the shadow
+    // map's own comparison sampler, shared by every frame-in-flight's set -- see the
+    // write loop below for why that one's written identically kMaxFramesInFlight times
+    // rather than needing its own double-buffering).
+    VkDescriptorPoolSize frameLightingPoolSizes[2]{};
+    frameLightingPoolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    frameLightingPoolSizes[0].descriptorCount = kMaxFramesInFlight;
+    frameLightingPoolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    frameLightingPoolSizes[1].descriptorCount = kMaxFramesInFlight;
 
     VkDescriptorPoolCreateInfo frameLightingPoolInfo{};
     frameLightingPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     frameLightingPoolInfo.maxSets = kMaxFramesInFlight;
-    frameLightingPoolInfo.poolSizeCount = 1;
-    frameLightingPoolInfo.pPoolSizes = &frameLightingPoolSize;
+    frameLightingPoolInfo.poolSizeCount = 2;
+    frameLightingPoolInfo.pPoolSizes = frameLightingPoolSizes;
 
     VkDescriptorPool frameLightingDescriptorPool = VK_NULL_HANDLE;
     if (vkCreateDescriptorPool(device, &frameLightingPoolInfo, nullptr,
@@ -869,14 +1041,32 @@ int main(int argc, char** argv) {
             bufferInfo.offset = 0;
             bufferInfo.range = sizeof(FrameLightingData);
 
-            VkWriteDescriptorSet write{};
-            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = frameLightingDescriptorSets[i];
-            write.dstBinding = 0;
-            write.descriptorCount = 1;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            write.pBufferInfo = &bufferInfo;
-            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+            // Lighting phase B -- the shadow map is one shared resource, not double-
+            // buffered per frame-in-flight the way the UBO above is (RHIShadowMap's own
+            // comment: baked once, read-only from then on, no concurrent write to race
+            // against) -- every frame-in-flight's own descriptor set still gets its own
+            // write of it, just pointing at the exact same VkImageView/VkSampler each time.
+            VkDescriptorImageInfo shadowImageInfo{};
+            shadowImageInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            shadowImageInfo.imageView = shadowMap.GetImageView();
+            shadowImageInfo.sampler = shadowMap.GetSampler();
+
+            VkWriteDescriptorSet writes[2]{};
+            writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[0].dstSet = frameLightingDescriptorSets[i];
+            writes[0].dstBinding = 0;
+            writes[0].descriptorCount = 1;
+            writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            writes[0].pBufferInfo = &bufferInfo;
+
+            writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[1].dstSet = frameLightingDescriptorSets[i];
+            writes[1].dstBinding = 1;
+            writes[1].descriptorCount = 1;
+            writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[1].pImageInfo = &shadowImageInfo;
+
+            vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
         }
     }
 
@@ -2627,7 +2817,12 @@ int main(int argc, char** argv) {
         {
             FrameLightingData frameLighting;
             frameLighting.viewProj = currentViewProj;
-            frameLighting.cameraWorldPosition = glm::vec4(currentCameraWorldPosition, 0.0f);
+            // Lighting phase B -- the baked shadow-casting light's own view-projection,
+            // fixed for as long as the bake stays valid (re-written every frame here like
+            // everything else in this UBO, but the *value* itself only ever changes if the
+            // Editor is relaunched -- no re-bake-on-scene-edit trigger exists yet).
+            frameLighting.lightViewProj = bakedLightViewProj;
+            frameLighting.cameraWorldPosition = glm::vec4(currentCameraWorldPosition, -1.0f);
 
             const auto& lights = world.Lights().Data();
             const auto& lightEntities = world.Lights().Entities();
@@ -2651,6 +2846,12 @@ int main(int argc, char** argv) {
                 }
                 gpuLight.color = glm::vec4(lights[i].color, lights[i].intensity);
                 gpuLight.params = glm::vec4(lights[i].range, 0.0f, 0.0f, 0.0f);
+                // Lighting phase B -- record which slot in this frame's own lights[]
+                // array the baked shadow-casting light landed in (FrameLightingData's own
+                // comment on why this rides along in cameraWorldPosition.w).
+                if (lightEntities[i] == shadowCasterLightEntity) {
+                    frameLighting.cameraWorldPosition.w = static_cast<float>(activeLightCount);
+                }
                 ++activeLightCount;
             }
             // Flat ambient term, not yet scene-configurable -- a fixed, modest default
@@ -2950,6 +3151,8 @@ int main(int argc, char** argv) {
     shadedPipeline.Shutdown();
     vertexLitPipeline.Shutdown();
     vertexLitTexturedPipeline.Shutdown();
+    shadowDepthPipeline.Shutdown();
+    shadowMap.Shutdown();
     destroyDepthResources();
     vkDestroyRenderPass(device, renderPass, nullptr);
 

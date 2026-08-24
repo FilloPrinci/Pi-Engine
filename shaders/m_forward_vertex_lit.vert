@@ -9,6 +9,11 @@
 // own. Same FrameLightingData UBO layout as m_forward_lit_shaded.vert/frag (set = 0,
 // binding = 0) -- see ForwardLitShadedPipeline.h's own comment for why this is a UBO
 // rather than a push constant, and for the directional-light (-Z forward) convention.
+//
+// Lighting phase B -- the static shadow map lookup happens here too (per-vertex, matching
+// the rest of this shader's own lighting), not in the fragment shader -- see
+// ForwardVertexLitPipeline.h's own comment for why the descriptor binding still declares
+// both stages regardless.
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
@@ -28,10 +33,27 @@ struct GpuLight {
 
 layout(set = 0, binding = 0) uniform FrameLightingData {
     mat4 viewProj;
+    mat4 lightViewProj; // lighting phase B -- the baked shadow-casting light's own
+                        // view-projection.
+    // w = index of the shadow-casting light within `lights[]` below, or -1 if none
+    // qualifies (FrameLightingData's own comment, ForwardLitShadedPipeline.h).
     vec4 cameraWorldPosition;
     vec4 ambientAndCount;
     GpuLight lights[4];
 } frame;
+
+// Lighting phase B -- same comparison sampler/binding shape as
+// m_forward_lit_shaded.frag's own uShadowMap; see that shader's comment for what
+// texture() returns for a "shadow" sampler type.
+layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
+
+float ComputeShadow(vec3 worldPosition, vec3 N, vec3 L) {
+    vec4 lightSpace = frame.lightViewProj * vec4(worldPosition, 1.0);
+    vec3 projected = lightSpace.xyz / lightSpace.w;
+    vec2 shadowUV = projected.xy * 0.5 + 0.5;
+    float bias = max(0.0025 * (1.0 - dot(N, L)), 0.0006);
+    return textureLod(uShadowMap, vec3(shadowUV, projected.z - bias), 0.0);
+}
 
 void main() {
     vec4 worldPosition = pc.model * vec4(inPosition, 1.0);
@@ -39,6 +61,7 @@ void main() {
     // ForwardLitShadedPipeline.h's own comment.
     vec3 worldNormal = normalize(mat3(pc.model) * inNormal);
     vec3 viewDir = normalize(frame.cameraWorldPosition.xyz - worldPosition.xyz);
+    int shadowLightIndex = int(frame.cameraWorldPosition.w);
 
     vec3 lit = frame.ambientAndCount.rgb;
     int lightCount = int(frame.ambientAndCount.a);
@@ -58,12 +81,15 @@ void main() {
             float falloff = clamp(1.0 - dist / range, 0.0, 1.0);
             attenuation = falloff * falloff;
         }
+        // Lighting phase B -- only the one baked light (if any) is shadowed, same
+        // reasoning m_forward_lit_shaded.frag's own comment gives.
+        float shadow = i == shadowLightIndex ? ComputeShadow(worldPosition.xyz, worldNormal, lightDir) : 1.0;
         vec3 lightColor = light.color.rgb * light.color.a;
         float diffuseTerm = max(dot(worldNormal, lightDir), 0.0);
         vec3 halfVector = normalize(lightDir + viewDir);
         float specularTerm =
             diffuseTerm > 0.0 ? pow(max(dot(worldNormal, halfVector), 0.0), 32.0) * 0.3 : 0.0;
-        lit += (diffuseTerm + specularTerm) * lightColor * attenuation;
+        lit += (diffuseTerm + specularTerm) * lightColor * attenuation * shadow;
     }
 
     vLitColor = lit;

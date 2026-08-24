@@ -96,9 +96,15 @@ keeps out of scope). Assign a `ForwardLitShaded` material to a Mesh and it's lit
 pipelines. This needed the project's first per-frame GPU uniform buffer (previously every
 buffer was written once at load time and never touched again) — double-buffered across
 frames-in-flight so writing this frame's light data can never race a still-in-flight GPU
-read from the previous one. No shadows yet (a static-only shadow map — baked once, not
-every frame, for lights/geometry that don't move — is a planned follow-up, consistent with
-this profile's own "prefer baked shadows over real-time shadow maps" design).
+read from the previous one. Shadows now exist too — a static shadow map, directional
+lights only for now, baked once (not every frame) at load time via this project's first
+render-to-texture RHI resource (`rhi::RHIShadowMap`) and a depth-only
+`renderer::ShadowDepthPipeline`, consistent with this profile's own "prefer baked shadows
+over real-time shadow maps" design. All three lit pipelines sample it (a comparison
+sampler, hardware bilinear PCF) — `ForwardLitShadedPipeline` per fragment, the two
+per-vertex pipelines per vertex, matching each one's own existing lighting granularity. A
+point-light cube-map variant isn't built yet but has been analyzed
+(`engine/include/engine/rhi/README.md`) for when it's picked up.
 
 **Default material + a "missing material" indicator**: two more changes on top of the
 above. An entity with no material assigned now renders as a flat, unmistakable

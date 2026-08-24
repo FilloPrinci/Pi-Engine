@@ -1,0 +1,7 @@
+{
+  "_comment": "Demo material asset (lighting phase B, docs/01 section 8.3's static shadow map) -- targets \"ForwardVertexLit\", a light neutral gray so the baked shadow (RHIShadowMap/ShadowDepthPipeline, editor/main.cpp) falling across the ground plane is clearly visible against it. Replaces the ground plane's previous no-material assignment -- this project's purple \"missing material\" indicator is still demonstrated elsewhere in this same scene (the RotateScript cube and the falling physics box both remain deliberately unassigned), so nothing about that proof is lost by giving the ground a material of its own.",
+  "shader": "ForwardVertexLit",
+  "properties": {
+    "tintColor": [0.75, 0.75, 0.78, 1.0]
+  }
+}

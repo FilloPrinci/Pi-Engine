@@ -19,8 +19,10 @@
 #include "engine/renderer/ForwardVertexLitPipeline.h"
 #include "engine/renderer/ForwardVertexLitTexturedPipeline.h"
 #include "engine/renderer/MaterialData.h"
+#include "engine/renderer/ShadowDepthPipeline.h"
 #include "engine/rhi/RHIBuffer.h"
 #include "engine/rhi/RHIContext.h"
+#include "engine/rhi/RHIShadowMap.h"
 #include "engine/rhi/RHISwapchain.h"
 #include "engine/rhi/RHITexture.h"
 #include "engine/scene/Scene.h"
@@ -31,6 +33,9 @@
 
 #include <imgui.h>
 #include <volk.h>
+// glm::lookAt/glm::ortho (lighting phase B's shadow-caster view-projection) -- same
+// reasoning editor/main.cpp's own include gives.
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -69,8 +74,10 @@ using engine::renderer::GpuLight;
 using engine::renderer::kMaxLights;
 using engine::renderer::MaterialData;
 using engine::renderer::MeshData;
+using engine::renderer::ShadowDepthPipeline;
 using engine::rhi::RHIBuffer;
 using engine::rhi::RHIContext;
+using engine::rhi::RHIShadowMap;
 using engine::rhi::RHISwapchain;
 using engine::rhi::RHITexture;
 using engine::script::ScriptComponent;
@@ -543,6 +550,134 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    // Lighting phase B -- same shadow map/bake as editor/main.cpp's own shadowMap/
+    // shadowDepthPipeline, see that file's comment for the full reasoning.
+    constexpr std::uint32_t kShadowMapResolution = 1024;
+    RHIShadowMap shadowMap;
+    if (!shadowMap.Init(context, kShadowMapResolution)) {
+        return EXIT_FAILURE;
+    }
+
+    ShadowDepthPipeline shadowDepthPipeline;
+    if (!shadowDepthPipeline.Init(context, shadowMap.GetRenderPass(), shadowMap.GetExtent(),
+                                  ShaderPath("m_shadow_depth.vert.spv").c_str(),
+                                  ShaderPath("m_shadow_depth.frag.spv").c_str())) {
+        return EXIT_FAILURE;
+    }
+
+    Entity shadowCasterLightEntity = engine::ecs::kInvalidEntity;
+    glm::mat4 bakedLightViewProj(1.0f);
+    {
+        const auto& lights = world.Lights().Data();
+        const auto& lightEntities = world.Lights().Entities();
+        for (std::size_t i = 0; i < lights.size(); ++i) {
+            if (lights[i].type == engine::ecs::LightComponent::Type::Directional &&
+                lights[i].isStatic && lights[i].castsShadow) {
+                shadowCasterLightEntity = lightEntities[i];
+                break;
+            }
+        }
+    }
+
+    if (shadowCasterLightEntity != engine::ecs::kInvalidEntity) {
+        constexpr float kShadowHalfExtent = 20.0f;
+        constexpr float kShadowNear = 0.1f;
+        constexpr float kShadowFar = 60.0f;
+        constexpr float kShadowDistance = 30.0f;
+
+        const glm::mat4 lightWorld = world.GetWorldMatrix(shadowCasterLightEntity);
+        const glm::vec3 lightForward =
+            glm::normalize(glm::mat3(lightWorld) * glm::vec3(0.0f, 0.0f, -1.0f));
+        const glm::vec3 eye = -lightForward * kShadowDistance;
+        glm::vec3 up(0.0f, 1.0f, 0.0f);
+        if (std::abs(glm::dot(lightForward, up)) > 0.999f) {
+            up = glm::vec3(0.0f, 0.0f, 1.0f);
+        }
+        const glm::mat4 lightView = glm::lookAt(eye, eye + lightForward, up);
+        glm::mat4 lightProj = glm::ortho(-kShadowHalfExtent, kShadowHalfExtent,
+                                         -kShadowHalfExtent, kShadowHalfExtent, kShadowNear,
+                                         kShadowFar);
+        lightProj[1][1] *= -1.0f;
+        bakedLightViewProj = lightProj * lightView;
+    }
+
+    {
+        VkCommandPoolCreateInfo poolInfo{};
+        poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        poolInfo.queueFamilyIndex = context.GetGraphicsQueueFamily();
+
+        VkCommandPool transientPool = VK_NULL_HANDLE;
+        if (vkCreateCommandPool(device, &poolInfo, nullptr, &transientPool) != VK_SUCCESS) {
+            std::fprintf(stderr, "play: vkCreateCommandPool (shadow bake) failed\n");
+            return EXIT_FAILURE;
+        }
+
+        VkCommandBufferAllocateInfo cmdAllocInfo{};
+        cmdAllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cmdAllocInfo.commandPool = transientPool;
+        cmdAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cmdAllocInfo.commandBufferCount = 1;
+
+        VkCommandBuffer bakeCmd = VK_NULL_HANDLE;
+        vkAllocateCommandBuffers(device, &cmdAllocInfo, &bakeCmd);
+
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(bakeCmd, &beginInfo);
+
+        VkClearValue shadowClear{};
+        shadowClear.depthStencil = {1.0f, 0};
+
+        VkRenderPassBeginInfo shadowPassBeginInfo{};
+        shadowPassBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        shadowPassBeginInfo.renderPass = shadowMap.GetRenderPass();
+        shadowPassBeginInfo.framebuffer = shadowMap.GetFramebuffer();
+        shadowPassBeginInfo.renderArea.offset = {0, 0};
+        shadowPassBeginInfo.renderArea.extent = shadowMap.GetExtent();
+        shadowPassBeginInfo.clearValueCount = 1;
+        shadowPassBeginInfo.pClearValues = &shadowClear;
+
+        vkCmdBeginRenderPass(bakeCmd, &shadowPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+        if (shadowCasterLightEntity != engine::ecs::kInvalidEntity) {
+            shadowDepthPipeline.Bind(bakeCmd);
+            const auto& shadowMeshes = world.Meshes().Data();
+            const auto& shadowMeshEntities = world.Meshes().Entities();
+            for (std::size_t i = 0; i < shadowMeshes.size(); ++i) {
+                if (world.GetTransform(shadowMeshEntities[i]) == nullptr) {
+                    continue;
+                }
+                MeshGpuData* gpuData = resolveMesh(shadowMeshes[i].meshGuid);
+                if (gpuData == nullptr) {
+                    continue;
+                }
+                VkBuffer vertexBuffers[] = {gpuData->vertexBuffer.GetHandle()};
+                VkDeviceSize offsets[] = {0};
+                vkCmdBindVertexBuffers(bakeCmd, 0, 1, vertexBuffers, offsets);
+                vkCmdBindIndexBuffer(bakeCmd, gpuData->indexBuffer.GetHandle(), 0,
+                                     VK_INDEX_TYPE_UINT32);
+                const glm::mat4 mvp =
+                    bakedLightViewProj * world.GetWorldMatrix(shadowMeshEntities[i]);
+                shadowDepthPipeline.PushMvp(bakeCmd, mvp);
+                vkCmdDrawIndexed(bakeCmd, gpuData->indexCount, 1, 0, 0, 0);
+            }
+        }
+
+        vkCmdEndRenderPass(bakeCmd);
+        vkEndCommandBuffer(bakeCmd);
+
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &bakeCmd;
+        vkQueueSubmit(context.GetGraphicsQueue(), 1, &submitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(context.GetGraphicsQueue());
+
+        vkDestroyCommandPool(device, transientPool, nullptr); // also frees `bakeCmd`.
+    }
+
     // Frame lighting UBO -- same shape as editor/main.cpp's own frameLightingBuffers/
     // frameLightingDescriptorSets, see that file's comment for the full reasoning (one
     // buffer + descriptor set per frame-in-flight, never a single shared instance).
@@ -555,15 +690,18 @@ int main(int argc, char** argv) {
         }
     }
 
-    VkDescriptorPoolSize frameLightingPoolSize{};
-    frameLightingPoolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    frameLightingPoolSize.descriptorCount = kMaxFramesInFlight;
+    // Two pool size entries now (lighting phase B) -- see editor/main.cpp's own comment.
+    VkDescriptorPoolSize frameLightingPoolSizes[2]{};
+    frameLightingPoolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    frameLightingPoolSizes[0].descriptorCount = kMaxFramesInFlight;
+    frameLightingPoolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    frameLightingPoolSizes[1].descriptorCount = kMaxFramesInFlight;
 
     VkDescriptorPoolCreateInfo frameLightingPoolInfo{};
     frameLightingPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     frameLightingPoolInfo.maxSets = kMaxFramesInFlight;
-    frameLightingPoolInfo.poolSizeCount = 1;
-    frameLightingPoolInfo.pPoolSizes = &frameLightingPoolSize;
+    frameLightingPoolInfo.poolSizeCount = 2;
+    frameLightingPoolInfo.pPoolSizes = frameLightingPoolSizes;
 
     VkDescriptorPool frameLightingDescriptorPool = VK_NULL_HANDLE;
     if (vkCreateDescriptorPool(device, &frameLightingPoolInfo, nullptr,
@@ -595,14 +733,29 @@ int main(int argc, char** argv) {
             bufferInfo.offset = 0;
             bufferInfo.range = sizeof(FrameLightingData);
 
-            VkWriteDescriptorSet write{};
-            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = frameLightingDescriptorSets[i];
-            write.dstBinding = 0;
-            write.descriptorCount = 1;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            write.pBufferInfo = &bufferInfo;
-            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+            // Lighting phase B -- shared, not double-buffered (see editor/main.cpp's own
+            // comment).
+            VkDescriptorImageInfo shadowImageInfo{};
+            shadowImageInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            shadowImageInfo.imageView = shadowMap.GetImageView();
+            shadowImageInfo.sampler = shadowMap.GetSampler();
+
+            VkWriteDescriptorSet writes[2]{};
+            writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[0].dstSet = frameLightingDescriptorSets[i];
+            writes[0].dstBinding = 0;
+            writes[0].descriptorCount = 1;
+            writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            writes[0].pBufferInfo = &bufferInfo;
+
+            writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[1].dstSet = frameLightingDescriptorSets[i];
+            writes[1].dstBinding = 1;
+            writes[1].descriptorCount = 1;
+            writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[1].pImageInfo = &shadowImageInfo;
+
+            vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
         }
     }
 
@@ -917,7 +1070,9 @@ int main(int argc, char** argv) {
         {
             FrameLightingData frameLighting;
             frameLighting.viewProj = currentViewProj;
-            frameLighting.cameraWorldPosition = glm::vec4(currentCameraWorldPosition, 0.0f);
+            // Lighting phase B -- see editor/main.cpp's own comment.
+            frameLighting.lightViewProj = bakedLightViewProj;
+            frameLighting.cameraWorldPosition = glm::vec4(currentCameraWorldPosition, -1.0f);
 
             const auto& lights = world.Lights().Data();
             const auto& lightEntities = world.Lights().Entities();
@@ -937,6 +1092,9 @@ int main(int argc, char** argv) {
                 }
                 gpuLight.color = glm::vec4(lights[i].color, lights[i].intensity);
                 gpuLight.params = glm::vec4(lights[i].range, 0.0f, 0.0f, 0.0f);
+                if (lightEntities[i] == shadowCasterLightEntity) {
+                    frameLighting.cameraWorldPosition.w = static_cast<float>(activeLightCount);
+                }
                 ++activeLightCount;
             }
             frameLighting.ambientAndCount =
@@ -1205,6 +1363,8 @@ int main(int argc, char** argv) {
     shadedPipeline.Shutdown();
     vertexLitPipeline.Shutdown();
     vertexLitTexturedPipeline.Shutdown();
+    shadowDepthPipeline.Shutdown();
+    shadowMap.Shutdown();
     destroyDepthResources();
     vkDestroyRenderPass(device, renderPass, nullptr);
 

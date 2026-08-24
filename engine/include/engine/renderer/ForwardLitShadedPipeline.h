@@ -38,8 +38,21 @@ struct GpuLight {
 // draw the way every unlit pipeline in this project still does.
 struct FrameLightingData {
     glm::mat4 viewProj = glm::mat4(1.0f);
-    glm::vec4 cameraWorldPosition = glm::vec4(0.0f); // xyz used (Blinn-Phong specular's
-                                                      // view direction), w unused.
+    // Lighting phase B (docs/01 section 8.3's static shadow map) -- the baked light's own
+    // view-projection, used to transform a fragment's/vertex's world position into shadow-
+    // map space. Always written every frame (like everything else here), even though the
+    // bake itself only happens once at load time -- the matrix value just doesn't change
+    // between bakes. Identity (harmless -- see cameraWorldPosition.w below) when no light
+    // qualifies as the shadow caster.
+    glm::mat4 lightViewProj = glm::mat4(1.0f);
+    // xyz = camera world position (Blinn-Phong specular's view direction). w = the index
+    // *within this frame's own `lights[]` array* of the light `lightViewProj` above was
+    // baked from, or -1 if no light qualifies (directional + isStatic + castsShadow, the
+    // first match found -- lighting phase B is directional-only, see
+    // engine::rhi::RHIShadowMap's own comment for why). Packed into this otherwise-unused
+    // component rather than growing the struct with a whole new vec4, same "reuse a spare
+    // slot" reasoning GpuLight::positionOrDirection.w already uses for its own type tag.
+    glm::vec4 cameraWorldPosition = glm::vec4(0.0f, 0.0f, 0.0f, -1.0f);
     glm::vec4 ambientAndCount = glm::vec4(0.05f, 0.05f, 0.05f, 0.0f); // rgb = flat ambient
                                                                       // term, a = active
                                                                       // light count (as a
@@ -52,8 +65,15 @@ struct FrameLightingData {
 // "Lighting / PBR" row's first real step) -- a separate class from every other
 // ForwardLit*Pipeline, never a single uber-shader/uber-pipeline with runtime branching
 // (CLAUDE.md rule 7). Minimal Blinn-Phong (ambient + N-dot-L diffuse + a fixed-shininess
-// specular term), no shadows (phase B, not this pass), no PBR (metallic/roughness stays
-// out of scope per CLAUDE.md).
+// specular term), no PBR (metallic/roughness stays out of scope per CLAUDE.md).
+//
+// Lighting phase B: set = 0 now has a *second* binding (binding = 1, a comparison-sampled
+// `sampler2DShadow`, `engine::rhi::RHIShadowMap`'s own sampler/view) alongside the
+// FrameLightingData UBO at binding = 0 -- both are per-frame/scene-wide data (bound once
+// per pass, never per-draw), so they share the one descriptor set rather than needing a
+// second set the way ForwardVertexLitTexturedPipeline's per-*material* texture does.
+// `BindFrameDescriptorSet()` below covers both bindings at once; no separate shadow-map
+// bind call exists because there's nothing per-draw about it.
 //
 // Expects `engine::renderer::Vertex` (MeshLoader.h: position + normal) as its vertex
 // input, same as ForwardLitPipeline/ForwardLitColorPipeline. Per-draw push constant is a

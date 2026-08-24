@@ -26,10 +26,20 @@ struct Light {
 
 layout(set = 0, binding = 0) uniform FrameLightingData {
     mat4 viewProj; // unused here, vertex-stage only.
+    mat4 lightViewProj; // lighting phase B -- the baked shadow-casting light's own
+                        // view-projection, used below to look up the shadow map.
+    // w = index of the shadow-casting light within `lights[]` below, or -1 if none
+    // qualifies (FrameLightingData's own comment, ForwardLitShadedPipeline.h).
     vec4 cameraWorldPosition;
     vec4 ambientAndCount; // rgb = ambient color, a = active light count.
     Light lights[4];
 } frame;
+
+// Lighting phase B -- comparison sampler (RHIShadowMap's own, hardware bilinear PCF, see
+// that class's header comment). Same set = 0 as the frame UBO above (this pipeline's own
+// header comment on why), a "shadow" GLSL sampler type: texture() takes a compare depth
+// as the last component and returns an already-filtered 0..1 result, not a raw color.
+layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
 
 // Fixed for phase A -- no per-material shininess/specular-intensity property yet (the
 // generic material property system, ShaderPropertySchema.h, could grow a Float property
@@ -37,9 +47,23 @@ layout(set = 0, binding = 0) uniform FrameLightingData {
 const float kShininess = 32.0;
 const float kSpecularIntensity = 0.3;
 
+// Lighting phase B -- 1.0 = fully lit, 0.0 = fully shadowed (RHIShadowMap's own hardware
+// PCF blends smoothly between the two at shadow edges). `bias` pushes the compared depth
+// slightly *toward* the light to avoid shadow acne (self-shadowing artifacts from the
+// shadow map's own finite resolution) -- slope-scaled by N-dot-L so grazing-angle surfaces
+// (where acne is worst) get a larger bias than surfaces facing the light head-on.
+float ComputeShadow(vec3 worldPosition, vec3 N, vec3 L) {
+    vec4 lightSpace = frame.lightViewProj * vec4(worldPosition, 1.0);
+    vec3 projected = lightSpace.xyz / lightSpace.w;
+    vec2 shadowUV = projected.xy * 0.5 + 0.5;
+    float bias = max(0.0025 * (1.0 - dot(N, L)), 0.0006);
+    return texture(uShadowMap, vec3(shadowUV, projected.z - bias));
+}
+
 void main() {
     vec3 N = normalize(vWorldNormal);
     vec3 V = normalize(frame.cameraWorldPosition.xyz - vWorldPosition);
+    int shadowLightIndex = int(frame.cameraWorldPosition.w);
 
     vec3 result = frame.ambientAndCount.rgb * pc.tintColor.rgb;
 
@@ -64,6 +88,12 @@ void main() {
             attenuation = falloff * falloff;
         }
 
+        // Lighting phase B -- only the one baked light (if any) is ever shadowed; every
+        // other light stays fully lit, matching this pass's own directional-only scope
+        // (a shadow baked from one directional light's viewpoint has no meaningful
+        // relationship to a different light's own occlusion).
+        float shadow = i == shadowLightIndex ? ComputeShadow(vWorldPosition, N, L) : 1.0;
+
         vec3 lightColor = light.color.rgb * light.color.a;
         float diffuseTerm = max(dot(N, L), 0.0);
         vec3 halfVector = normalize(L + V);
@@ -71,7 +101,7 @@ void main() {
             diffuseTerm > 0.0 ? pow(max(dot(N, halfVector), 0.0), kShininess) * kSpecularIntensity
                               : 0.0;
 
-        result += (diffuseTerm * pc.tintColor.rgb + specularTerm) * lightColor * attenuation;
+        result += (diffuseTerm * pc.tintColor.rgb + specularTerm) * lightColor * attenuation * shadow;
     }
 
     outColor = vec4(result, pc.tintColor.a);

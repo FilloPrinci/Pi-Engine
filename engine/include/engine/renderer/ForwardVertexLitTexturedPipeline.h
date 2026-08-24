@@ -33,6 +33,12 @@ namespace engine::renderer {
 // assigned, the caller simply doesn't draw the entity through this pipeline at all
 // (ForwardVertexLitPipeline covers the no-texture case instead), so there is no in-shader
 // "missing texture" branch.
+//
+// Lighting phase B: set = 0 also carries the static shadow map's comparison sampler
+// (binding = 1, alongside the frame UBO at binding = 0) -- identically defined across all
+// three lit pipelines (ForwardVertexLitPipeline's own comment on this exact binding
+// explains why), so the same already-allocated frame descriptor set covers this pipeline
+// too. Set = 1 (the per-material texture) is unaffected.
 class ForwardVertexLitTexturedPipeline {
 public:
     ForwardVertexLitTexturedPipeline() = default;

@@ -57,7 +57,21 @@ bool ForwardLitShadedPipeline::Init(rhi::RHIContext& context, VkRenderPass rende
     frameDataBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     frameDataBinding.descriptorCount = 1;
     frameDataBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    desc.descriptorSetLayoutBindings = {frameDataBinding};
+
+    // Lighting phase B -- the static shadow map's comparison sampler, same set as the
+    // frame UBO above (this class's own header comment explains why). This pipeline's own
+    // shadow lookup happens per-fragment (matching its per-fragment Blinn-Phong), but the
+    // binding still declares *both* stages -- ForwardVertexLitPipeline's own comment on
+    // its identical binding explains why: every lit pipeline's set-0 bindings must stay
+    // identically defined so callers can share one already-allocated VkDescriptorSet
+    // across all three (Vulkan spec 14.2.2).
+    VkDescriptorSetLayoutBinding shadowMapBinding{};
+    shadowMapBinding.binding = 1;
+    shadowMapBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    shadowMapBinding.descriptorCount = 1;
+    shadowMapBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    desc.descriptorSetLayoutBindings = {frameDataBinding, shadowMapBinding};
 
     return m_pipeline.Init(context, desc);
 }

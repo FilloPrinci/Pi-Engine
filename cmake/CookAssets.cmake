@@ -72,6 +72,8 @@ if(TARGET cooker)
         "${CMAKE_SOURCE_DIR}/shaders/m_forward_vertex_lit.frag"
         "${CMAKE_SOURCE_DIR}/shaders/m_forward_vertex_lit_textured.vert"
         "${CMAKE_SOURCE_DIR}/shaders/m_forward_vertex_lit_textured.frag"
+        "${CMAKE_SOURCE_DIR}/shaders/m_shadow_depth.vert"
+        "${CMAKE_SOURCE_DIR}/shaders/m_shadow_depth.frag"
     )
     set(_pi_engine_cooked_shaders "")
     foreach(shader_source ${_pi_engine_shader_sources})

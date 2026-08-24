@@ -501,5 +501,63 @@ confirmed via its Inspector "Parent" field) → the child's own Parent field rea
 right after the delete, before the undo, confirming the orphan-then-restore round-trip
 both ways; `+ Collider` → Undo (Collider section gone, back to the Add Component row).
 
+**Lighting phase B -- static shadow map, directional-only (2026-08-24).** The user's own
+explicit request, right after phases 4-5 above: proceed with the static shadow map next
+(docs/01 section 8.3's "preferably baked" guidance, `lighting-phase-a` memory's own
+long-flagged follow-up), directional lights only for now (point lights would need a cube
+map -- 6 render passes instead of 1 -- analyzed ahead of time per the user's own request,
+see `engine/include/engine/rhi/README.md`'s `RHIShadowMap` entry for exactly what that
+would need), applied to all three lit pipelines for visual consistency (not just the
+original `ForwardLitShaded`).
+
+Both Editor executables gained an `rhi::RHIShadowMap` (this project's first
+render-to-texture target -- a depth-only image also read back as a shader input) + a
+`renderer::ShadowDepthPipeline` (an eighth concrete pipeline, depth-only, renders scene
+geometry from the light's own view instead of the camera's). Baked exactly once,
+synchronously, right at load time via a one-off command buffer + `vkQueueWaitIdle()` (same
+pattern `RHITexture`'s own upload path already uses) -- not re-baked per frame, and not
+re-baked if the scene changes afterward (a manual "Rebake Shadows" trigger is a natural,
+not-yet-built follow-up). The shadow-casting light is the first `LightComponent` found
+that's `Directional` **and** both `isStatic` and `castsShadow` (those hint flags existed
+since phase A but were never actually enforced until now) -- if none qualifies, the bake
+still runs (clearing the shadow map to "far," i.e. "nothing is ever shadowed") so every lit
+pipeline's shadow lookup stays well-defined either way, never reading undefined memory.
+The light's own view-projection uses a fixed orthographic frustum centered on the world
+origin (not fitted to the scene's actual bounds -- a v1 simplification, same "small,
+fixed, revisit if it ever matters" reasoning as this Editor's other fixed-size choices).
+
+All three lit pipelines (`ForwardLitShadedPipeline`/`ForwardVertexLitPipeline`/
+`ForwardVertexLitTexturedPipeline`) gained a comparison-sampled shadow lookup in their
+shared per-frame descriptor set (a second binding alongside the existing lighting UBO,
+identically defined across all three so the one already-shared descriptor set keeps
+covering all three -- no new allocation needed). `ForwardLitShadedPipeline` samples it
+per-fragment; the two `ForwardVertexLit*` pipelines sample it per-vertex instead, matching
+each pipeline's own existing lighting granularity. Only the one baked light is ever
+shadowed -- every other light in a scene (a point light, or a second directional one)
+stays fully unaffected, matching this phase's directional-only scope.
+
+`editor/assets/demo.scene.json`: the sun light gained `"isStatic": true`/`"castsShadow":
+true` (previously both `false`, inert hints); the ground plane -- previously left with no
+material at all, rendering flat purple (the "missing material" indicator) -- now
+references a new `assets/m_demo_ground.material.json` (`"ForwardVertexLit"`, light neutral
+gray) specifically so the sun's shadow is visible falling across a lit receiving surface.
+The purple indicator itself is still demonstrated elsewhere in the same scene (the
+RotateScript cube and the falling physics box both remain deliberately unassigned).
+
+**Verified on Pi4**: a crisp, hard-edged shadow (matching the casting boxes' own
+silhouettes) visible on the ground plane in multiple camera angles, screenshot-confirmed
+both close up and from a wide establishing shot -- since the ground itself renders through
+`ForwardVertexLit`, this is simultaneously proof the per-*vertex* shadow lookup works, not
+just the per-fragment one `ForwardLitShaded` already had a design for. Editor and Play Mode
+both run cleanly at 60 FPS capped and 179 FPS uncapped (`PI_ENGINE_PRESENT_MODE=immediate`)
+with no flicker/corruption -- a real drop from lighting-phase-A-follow-up's own ~131-165
+FPS uncapped range, an expected cost from the extra shadow-map texture fetch now happening
+in every lit pipeline's vertex or fragment stage, not a regression. 95/95 tests pass on
+both Linux desktop and Pi4 (no engine_core test changes -- shadow-map correctness has no
+CPU-testable surface the way e.g. scene JSON parsing does; verified visually on Pi4
+hardware, same precedent every other rendering feature in this codebase already follows).
+`demo.scene.json` confirmed byte-identical on disk after killing the process (`Save` never
+clicked during testing).
+
 See the roadmap doc for what's explicitly deferred to later steps, and
 `docs/07-unity-parity-analysis.md` for what's missing relative to Unity's own editor.

@@ -4,6 +4,9 @@
 // m_forward_vertex_lit.vert (same split as ForwardLitColorPipeline/
 // ForwardLitTexturedColorPipeline). Identical per-vertex lighting math; only difference is
 // passing UVs through for the fragment stage to sample an albedo texture with.
+//
+// Lighting phase B -- the static shadow map lookup happens here too (per-vertex, same
+// reasoning m_forward_vertex_lit.vert's own comment gives).
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
@@ -25,15 +28,34 @@ struct GpuLight {
 
 layout(set = 0, binding = 0) uniform FrameLightingData {
     mat4 viewProj;
+    mat4 lightViewProj; // lighting phase B -- the baked shadow-casting light's own
+                        // view-projection.
+    // w = index of the shadow-casting light within `lights[]` below, or -1 if none
+    // qualifies (FrameLightingData's own comment, ForwardLitShadedPipeline.h).
     vec4 cameraWorldPosition;
     vec4 ambientAndCount;
     GpuLight lights[4];
 } frame;
 
+// Lighting phase B -- same comparison sampler/binding shape as
+// m_forward_vertex_lit.vert's own uShadowMap. Not to be confused with set = 1's own
+// albedo texture sampler (declared in m_forward_vertex_lit_textured.frag instead) -- two
+// unrelated bindings at two different (set, binding) pairs.
+layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
+
+float ComputeShadow(vec3 worldPosition, vec3 N, vec3 L) {
+    vec4 lightSpace = frame.lightViewProj * vec4(worldPosition, 1.0);
+    vec3 projected = lightSpace.xyz / lightSpace.w;
+    vec2 shadowUV = projected.xy * 0.5 + 0.5;
+    float bias = max(0.0025 * (1.0 - dot(N, L)), 0.0006);
+    return textureLod(uShadowMap, vec3(shadowUV, projected.z - bias), 0.0);
+}
+
 void main() {
     vec4 worldPosition = pc.model * vec4(inPosition, 1.0);
     vec3 worldNormal = normalize(mat3(pc.model) * inNormal);
     vec3 viewDir = normalize(frame.cameraWorldPosition.xyz - worldPosition.xyz);
+    int shadowLightIndex = int(frame.cameraWorldPosition.w);
 
     vec3 lit = frame.ambientAndCount.rgb;
     int lightCount = int(frame.ambientAndCount.a);
@@ -51,12 +73,13 @@ void main() {
             float falloff = clamp(1.0 - dist / range, 0.0, 1.0);
             attenuation = falloff * falloff;
         }
+        float shadow = i == shadowLightIndex ? ComputeShadow(worldPosition.xyz, worldNormal, lightDir) : 1.0;
         vec3 lightColor = light.color.rgb * light.color.a;
         float diffuseTerm = max(dot(worldNormal, lightDir), 0.0);
         vec3 halfVector = normalize(lightDir + viewDir);
         float specularTerm =
             diffuseTerm > 0.0 ? pow(max(dot(worldNormal, halfVector), 0.0), 32.0) * 0.3 : 0.0;
-        lit += (diffuseTerm + specularTerm) * lightColor * attenuation;
+        lit += (diffuseTerm + specularTerm) * lightColor * attenuation * shadow;
     }
 
     vLitColor = lit;

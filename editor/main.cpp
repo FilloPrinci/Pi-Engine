@@ -48,6 +48,14 @@
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <volk.h>
+// stbi_load()/stbi_image_free()/stbi_failure_reason() (vendored third_party/stb_image.h,
+// same header tools/cooker's own CookTexture.cpp already decodes a source .png with) --
+// the Asset Browser's texture thumbnails (post-Editor-E8,
+// docs/07-unity-parity-analysis.md's Asset Browser row) decode a source image directly,
+// at thumbnail-display time. Declarations only here -- StbImageImpl.cpp is the one
+// translation unit in this target that defines STB_IMAGE_IMPLEMENTATION, see its own
+// comment for why that's a separate file.
+#include <stb_image.h>
 
 #include <algorithm>
 #include <chrono>
@@ -153,6 +161,72 @@ std::vector<std::string> ListDirectory(const std::filesystem::path& dir, bool ex
     }
     std::sort(names.begin(), names.end());
     return names;
+}
+
+// Recursive variant of ListDirectory() above, for the Source Assets panel's folder tree
+// (post-Editor-E8, docs/07-unity-parity-analysis.md's Asset Browser row -- subfolders
+// were flat-listed-only before this). Returns paths relative to `dir`, sorted, `.meta`
+// sidecars excluded the same way ListDirectory() always does (this listing is only ever
+// used for the Source Assets side, which always wants that -- unlike ListDirectory()
+// itself, there's no separate "keep the sidecars" caller to support here).
+// generic_string() forces '/' separators on every platform, matching every other path
+// this project already stores/compares as a plain string (e.g. scene JSON's own asset
+// paths) -- Windows' native '\\' would otherwise leak into a payload/prefix string this
+// code later splits on '/'.
+std::vector<std::string> ListDirectoryRecursive(const std::filesystem::path& dir) {
+    std::vector<std::string> names;
+    std::error_code errorCode;
+    if (!std::filesystem::exists(dir, errorCode)) {
+        return names;
+    }
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(dir, errorCode)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        std::error_code relativeError;
+        const std::filesystem::path relative =
+            std::filesystem::relative(entry.path(), dir, relativeError);
+        if (relativeError) {
+            continue;
+        }
+        std::string name = relative.generic_string();
+        constexpr std::string_view kMetaSuffix = ".meta";
+        if (name.size() >= kMetaSuffix.size() &&
+            name.compare(name.size() - kMetaSuffix.size(), kMetaSuffix.size(), kMetaSuffix) == 0) {
+            continue;
+        }
+        names.push_back(std::move(name));
+    }
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
+// Asset Browser drag-and-drop payload id (post-Editor-E8, docs/07-unity-parity-analysis.md's
+// Asset Browser row) -- the payload data is the dragged file's own relative path (under
+// assets/), copied into a fixed-size buffer the same way the Hierarchy panel's own
+// PI_ENGINE_HIERARCHY_ENTITY payload copies a fixed-size Entity; ImGui makes its own copy
+// at SetDragDropPayload() time either way, so a stack-local source is safe. Two drop
+// targets read it: the Inspector's "Assign Material" section (a `.material.json` file)
+// and the Scene View itself (a `.gltf`/`.glb` mesh file, spawning a new entity) -- both
+// just ignore a payload whose extension doesn't match what they accept.
+constexpr const char* kSourceAssetPayloadId = "PI_ENGINE_SOURCE_ASSET";
+constexpr std::size_t kSourceAssetPayloadSize = 256;
+
+// Small per-file-type color for the Source Assets tree's icon column, for any file
+// stb_image can't decode into a real thumbnail (GetOrCreateAssetThumbnail() below still
+// tries every file once regardless of extension -- stb_image's own format sniffing
+// already handles "is this actually an image" more reliably than an extension guess).
+ImVec4 AssetTypeColor(const std::string& relativePath) {
+    if (relativePath.ends_with(".gltf") || relativePath.ends_with(".glb")) {
+        return ImVec4(0.55f, 0.75f, 1.0f, 1.0f); // mesh -- light blue
+    }
+    if (relativePath.ends_with(".material.json")) {
+        return ImVec4(1.0f, 0.65f, 0.3f, 1.0f); // material -- orange
+    }
+    if (relativePath.ends_with(".vert") || relativePath.ends_with(".frag")) {
+        return ImVec4(0.7f, 1.0f, 0.55f, 1.0f); // shader source -- green
+    }
+    return ImVec4(0.7f, 0.7f, 0.7f, 1.0f); // generic/unknown -- gray
 }
 
 // Shared by the Hierarchy panel's tree and the Inspector's parent picker (post-
@@ -596,8 +670,12 @@ int main(int argc, char** argv) {
     RecordRecentProject(scenePath); // Editor step E7 -- Project Hub's recent-scenes list.
 
     // --- Asset Browser listing (Editor step E6) -- read once at startup, see
-    //     ListDirectory()'s own comment for why this isn't refreshed live. ---
-    const std::vector<std::string> sourceAssetNames = ListDirectory(PI_ENGINE_ASSETS_DIR, true);
+    //     ListDirectory()'s own comment for why this isn't refreshed live.
+    //     sourceAssetNames is the recursive variant (post-Editor-E8, subfolders) since
+    //     it's the side the tree/thumbnails/drag-drop below actually need paths, not
+    //     just filenames, for -- cookedAssetNames stays flat (GUID-named Cooker output,
+    //     never user-organized into folders). ---
+    const std::vector<std::string> sourceAssetNames = ListDirectoryRecursive(PI_ENGINE_ASSETS_DIR);
     const std::vector<std::string> cookedAssetNames = ListDirectory(PI_ENGINE_COOKED_ASSET_DIR, false);
     const std::vector<std::string> cookedShaderNames =
         ListDirectory(std::string(PI_ENGINE_COOKED_ASSET_DIR) + "/shaders", false);
@@ -1490,9 +1568,78 @@ int main(int argc, char** argv) {
     float playStatusRemainingSeconds = 0.0f;
     const std::string buildDir = PI_ENGINE_BUILD_DIR;
 
-    // --- Asset Browser selection (Editor step E6) -- filename only (not a full path);
-    //     empty means nothing selected. ---
+    // --- Asset Browser selection (Editor step E6) -- relative path (post-Editor-E8,
+    //     subfolders -- used to be filename-only, back when the listing itself was
+    //     flat); empty means nothing selected. ---
     std::string selectedSourceAsset;
+
+    // --- Asset Browser thumbnails (post-Editor-E8, docs/07-unity-parity-analysis.md's
+    //     Asset Browser row) -- one GPU-resident RHITexture + its registered ImGui
+    //     texture id per source image file, built lazily the first time that file's row
+    //     is about to be drawn (most source assets aren't images at all, and the ones
+    //     that are only need decoding once, matching sourceAssetNames' own "read once,
+    //     no live refresh" precedent -- never evicted, an acceptable simplification at
+    //     this project's demo-content-sized assets/ directory). std::unique_ptr per
+    //     entry, not RHITexture stored directly in the map, same reasoning
+    //     materialTextureCache above already established: RHITexture's deleted copy
+    //     constructor plus its own non-trivial destructor leave it non-movable too, so
+    //     std::unordered_map's own emplace-in-place needs an indirection to construct
+    //     through. ---
+    struct AssetThumbnail {
+        RHITexture texture;
+        VkDescriptorSet imGuiTextureId = VK_NULL_HANDLE;
+    };
+    std::unordered_map<std::string, std::unique_ptr<AssetThumbnail>> assetThumbnails;
+    // Returns VK_NULL_HANDLE for anything not a recognized raster image extension, or
+    // that stb_image still fails to decode despite that -- the Source Assets tree
+    // renderer falls back to AssetTypeColor()'s colored icon at the call site in either
+    // case, decoding is only attempted once per path either way (a failure is cached as
+    // a real map entry too, an AssetThumbnail with imGuiTextureId still VK_NULL_HANDLE,
+    // so a bad file isn't re-decoded on every redraw). The extension check up front
+    // matters, not just an optimization: stb_image's own TGA loader has no real magic
+    // number to key off (unlike PNG/JPEG/etc.) and falls back to inspecting the file's
+    // byte structure -- calling stbi_load() on an arbitrary non-image file (a .gltf's
+    // JSON text, a .glb's binary chunks) can, and during this feature's own Pi4
+    // testing did, spuriously "succeed" as a tiny garbage TGA decode instead of
+    // cleanly failing, rendering as visual noise instead of falling back to the
+    // colored icon. This project's own asset pipeline only ever produces/consumes
+    // .png source textures anyway (CLAUDE.md's dependency table: "stb_image: PNG
+    // decoding"), so restricting to that isn't a real capability loss.
+    auto getOrCreateThumbnail = [&](const std::string& relativePath) -> VkDescriptorSet {
+        auto existingIt = assetThumbnails.find(relativePath);
+        if (existingIt != assetThumbnails.end()) {
+            return existingIt->second->imGuiTextureId;
+        }
+        auto thumbnail = std::make_unique<AssetThumbnail>();
+        if (!relativePath.ends_with(".png")) {
+            const VkDescriptorSet result = thumbnail->imGuiTextureId; // VK_NULL_HANDLE
+            assetThumbnails.emplace(relativePath, std::move(thumbnail));
+            return result;
+        }
+        const std::string fullPath = std::string(PI_ENGINE_ASSETS_DIR) + "/" + relativePath;
+        int width = 0;
+        int height = 0;
+        int sourceChannels = 0;
+        // Force 4 channels regardless of the source, same reasoning
+        // tools/cooker/CookTexture.cpp's own stbi_load() call already documents --
+        // CookedTexture.h's/RHITexture::InitWithData()'s format is always tightly
+        // packed RGBA8, no per-thumbnail channel count to track.
+        unsigned char* pixels = stbi_load(fullPath.c_str(), &width, &height, &sourceChannels, 4);
+        if (pixels != nullptr) {
+            const std::size_t byteCount =
+                static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4;
+            if (thumbnail->texture.InitWithData(context, static_cast<std::uint32_t>(width),
+                                                static_cast<std::uint32_t>(height), pixels,
+                                                byteCount)) {
+                thumbnail->imGuiTextureId = overlay.RegisterTexture(
+                    thumbnail->texture.GetImageView(), thumbnail->texture.GetSampler());
+            }
+            stbi_image_free(pixels);
+        }
+        const VkDescriptorSet result = thumbnail->imGuiTextureId;
+        assetThumbnails.emplace(relativePath, std::move(thumbnail));
+        return result;
+    };
 
     // --- Console: severity filter + collapse duplicates (docs/07-unity-parity-analysis.md's
     //     Console panel row, the user's own explicit request). This project's own logging
@@ -2169,6 +2316,39 @@ int main(int argc, char** argv) {
                             ImGui::TextDisabled("(no material assets yet)");
                         }
 
+                        // Drag-drop assignment (post-Editor-E8, the user's own explicit
+                        // request) -- an explicit drop strip rather than attaching the
+                        // target to the combo/TextDisabled above, so it's there (and
+                        // discoverable) even in the "no material assets yet" branch.
+                        // Ignores anything that isn't a .material.json -- dragging a
+                        // mesh or texture here does nothing, same "wrong type, no-op"
+                        // behavior the Scene View's own mesh-asset drop target below has.
+                        ImGui::TextDisabled("(drop a .material.json here)");
+                        if (ImGui::BeginDragDropTarget()) {
+                            if (const ImGuiPayload* payload =
+                                    ImGui::AcceptDragDropPayload(kSourceAssetPayloadId)) {
+                                const std::string droppedPath(
+                                    static_cast<const char*>(payload->Data));
+                                if (droppedPath.ends_with(".material.json")) {
+                                    AssetGuid droppedGuid;
+                                    const std::string fullPath =
+                                        std::string(PI_ENGINE_ASSETS_DIR) + "/" + droppedPath;
+                                    if (engine::asset::TryReadAssetMetaGuid(fullPath.c_str(),
+                                                                            droppedGuid)) {
+                                        mesh->materialGuid = droppedGuid;
+                                        // Keeps materialGuidToPath in sync even if this
+                                        // material wasn't present at startup (e.g.
+                                        // hand-added to assets/ after the Editor
+                                        // launched) -- cheap, idempotent, same cache
+                                        // the combo above and every render pass already
+                                        // read through.
+                                        materialGuidToPath[droppedGuid] = fullPath;
+                                    }
+                                }
+                            }
+                            ImGui::EndDragDropTarget();
+                        }
+
                         // New Material -- writes a fresh .material.json (default property
                         // values straight from the chosen shader's own schema,
                         // EnsureMaterialProperty()'s same fallback-filling logic the
@@ -2648,12 +2828,86 @@ int main(int argc, char** argv) {
         //     the layout block above) tabbed alongside Console/Project Hub -- no
         //     SetNextWindowPos/Size. ---
         ImGui::Begin("Assets");
-        if (ImGui::CollapsingHeader("Source Assets (assets/)", ImGuiTreeNodeFlags_DefaultOpen)) {
-            for (const std::string& name : sourceAssetNames) {
-                if (ImGui::Selectable(name.c_str(), name == selectedSourceAsset)) {
-                    selectedSourceAsset = name;
+
+        // Source Assets tree (post-Editor-E8, docs/07-unity-parity-analysis.md's Asset
+        // Browser row: subfolders + thumbnails + drag-drop) -- recurses over
+        // sourceAssetNames (already the recursive listing) grouping by path component,
+        // same "group by common prefix" idea the Hierarchy panel's own
+        // renderEntityNode() uses for parent/child, just keyed by a path string instead
+        // of Entity::parent. A std::function, not a plain lambda, since it recurses into
+        // itself. `prefix` is the folder path being rendered, with a trailing '/'
+        // (empty at the root).
+        std::function<void(const std::string&)> renderSourceAssetTree =
+            [&](const std::string& prefix) {
+                std::vector<std::string> childFolders;
+                std::vector<std::string> childFiles;
+                for (const std::string& path : sourceAssetNames) {
+                    if (path.size() <= prefix.size() ||
+                        path.compare(0, prefix.size(), prefix) != 0) {
+                        continue;
+                    }
+                    const std::string remainder = path.substr(prefix.size());
+                    const std::size_t slash = remainder.find('/');
+                    if (slash == std::string::npos) {
+                        childFiles.push_back(path);
+                    } else {
+                        const std::string folder = remainder.substr(0, slash);
+                        if (std::find(childFolders.begin(), childFolders.end(), folder) ==
+                            childFolders.end()) {
+                            childFolders.push_back(folder);
+                        }
+                    }
                 }
-            }
+                for (const std::string& folder : childFolders) {
+                    const std::string childPrefix = prefix + folder + "/";
+                    if (ImGui::TreeNode(childPrefix.c_str(), "%s", folder.c_str())) {
+                        renderSourceAssetTree(childPrefix);
+                        ImGui::TreePop();
+                    }
+                }
+                for (const std::string& path : childFiles) {
+                    const std::string leafName = path.substr(prefix.size());
+                    // Thumbnail (a real image preview) or a colored type-icon,
+                    // deliberately a fixed-size square before the row's own label
+                    // rather than replacing it -- Unity's own Project window grid view
+                    // was considered and rejected as a bigger layout change than this
+                    // gap actually needs; a list with an icon column reuses the
+                    // existing Selectable-per-row shape untouched.
+                    const VkDescriptorSet thumbnailId = getOrCreateThumbnail(path);
+                    if (thumbnailId != VK_NULL_HANDLE) {
+                        ImGui::Image(thumbnailId, ImVec2(16.0f, 16.0f));
+                    } else {
+                        // ColorButton, not a Unicode glyph like "■" -- ImGui's
+                        // default font only covers Latin-1, so a block-element
+                        // character renders as a "missing glyph" placeholder instead
+                        // of the intended colored square.
+                        ImGui::ColorButton(
+                            path.c_str(), AssetTypeColor(path),
+                            ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoBorder |
+                                ImGuiColorEditFlags_NoAlpha,
+                            ImVec2(16.0f, 16.0f));
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Selectable(leafName.c_str(), path == selectedSourceAsset)) {
+                        selectedSourceAsset = path;
+                    }
+                    // Drag source (post-Editor-E8, the user's own explicit request) --
+                    // the Inspector's "Assign Material" section and the Scene View
+                    // itself are the two drop targets that read this payload, each
+                    // ignoring it if the dropped file's extension isn't one they
+                    // accept (see kSourceAssetPayloadId's own comment).
+                    if (ImGui::BeginDragDropSource()) {
+                        char payloadBuffer[kSourceAssetPayloadSize];
+                        std::snprintf(payloadBuffer, sizeof(payloadBuffer), "%s", path.c_str());
+                        ImGui::SetDragDropPayload(kSourceAssetPayloadId, payloadBuffer,
+                                                  sizeof(payloadBuffer));
+                        ImGui::TextUnformatted(leafName.c_str());
+                        ImGui::EndDragDropSource();
+                    }
+                }
+            };
+        if (ImGui::CollapsingHeader("Source Assets (assets/)", ImGuiTreeNodeFlags_DefaultOpen)) {
+            renderSourceAssetTree("");
             if (sourceAssetNames.empty()) {
                 ImGui::TextDisabled("(empty)");
             }
@@ -3256,6 +3510,44 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Drag a mesh source asset from the Assets panel onto the Scene View to spawn a
+        // new entity with it (post-Editor-E8, docs/07-unity-parity-analysis.md's Asset
+        // Browser row) -- parallels the Hierarchy panel's own "Create Cube" button, just
+        // reading the mesh GUID off whatever was dragged instead of always
+        // defaultCubeMeshGuid. No ImGui window actually covers the Scene View
+        // (ImGuiDockNodeFlags_PassthruCentralNode, see the dockspace setup above), so
+        // there's no widget to hang a normal BeginDragDropTarget() off --
+        // GetDragDropPayload() peeks the active payload directly instead, gated the
+        // same "released, and not hovering any ImGui panel" way every other viewport
+        // gesture in this file already is. Independent of the gizmo picking block just
+        // above (that one only ever fires on a *press*, this one only on a *release*),
+        // so there's no ordering conflict between the two despite both reading
+        // mouseOverImGui.
+        if (!mouseOverImGui && inputSystem.WasMouseLeftReleasedThisFrame()) {
+            if (const ImGuiPayload* payload = ImGui::GetDragDropPayload()) {
+                if (payload->IsDataType(kSourceAssetPayloadId)) {
+                    const std::string droppedPath(static_cast<const char*>(payload->Data));
+                    if (droppedPath.ends_with(".gltf") || droppedPath.ends_with(".glb")) {
+                        AssetGuid droppedGuid;
+                        const std::string fullPath =
+                            std::string(PI_ENGINE_ASSETS_DIR) + "/" + droppedPath;
+                        if (engine::asset::TryReadAssetMetaGuid(fullPath.c_str(), droppedGuid)) {
+                            EntitySnapshot snapshot;
+                            snapshot.hasMesh = true;
+                            snapshot.mesh.meshGuid = droppedGuid;
+                            // Same fixed approximation "Create Cube" uses for its own
+                            // defaultCubeMeshGuid entity -- boundsRadius only ever
+                            // drives the viewport picking ray's sphere test, already an
+                            // approximation everywhere else it's used, and the actual
+                            // mesh dimensions aren't known without loading it.
+                            snapshot.mesh.boundsRadius = 0.87f;
+                            createEntityWithUndo(snapshot);
+                        }
+                    }
+                }
+            }
+        }
+
         // --- Gizmo drawing -- ImGui foreground draw list (E1's overlay already renders
         //     ImGui on top of the 3D scene each frame, see onRender), only when something
         //     is selected. Same axis endpoints the hit-test above computes -- kept as a
@@ -3729,6 +4021,17 @@ int main(int argc, char** argv) {
     for (VkFramebuffer framebuffer : framebuffers) {
         vkDestroyFramebuffer(device, framebuffer, nullptr);
     }
+    // Asset Browser thumbnails (post-Editor-E8) -- each one registered a VkDescriptorSet
+    // with the ImGui Vulkan backend's own descriptor pool (RegisterTexture()), which
+    // overlay.Shutdown() below destroys -- unregister (then destroy the RHITexture
+    // itself, assetThumbnails.clear()) before that, not after, same ordering reasoning
+    // as every other Vulkan resource cleanup in this block.
+    for (auto& [path, thumbnail] : assetThumbnails) {
+        if (thumbnail->imGuiTextureId != VK_NULL_HANDLE) {
+            overlay.UnregisterTexture(thumbnail->imGuiTextureId);
+        }
+    }
+    assetThumbnails.clear();
     overlay.Shutdown();
     colorPipeline.Shutdown();
     texturedColorPipeline.Shutdown();

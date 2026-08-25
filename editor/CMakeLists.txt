@@ -4,9 +4,27 @@
 # links engine_core fully: it needs the real ECS/RHI/renderer/scene loader to show a Scene
 # View, not just offline conversion code.
 
-add_executable(editor main.cpp ProjectHub.cpp BuildPipeline.cpp UndoStack.cpp)
+add_executable(editor main.cpp ProjectHub.cpp BuildPipeline.cpp UndoStack.cpp StbImageImpl.cpp)
 target_link_libraries(editor PRIVATE engine_core)
 pi_engine_set_warnings(editor)
+
+# stb_image.h (vendored third-party, same header tools/cooker's own CookTexture.cpp
+# already uses to decode a source .png at cook time) -- the Asset Browser's texture
+# thumbnails (post-Editor-E8, docs/07-unity-parity-analysis.md's Asset Browser row) are
+# the first place *this* target decodes an image itself, at thumbnail-display time
+# rather than cook time. engine_core already vendors the header too, but only PRIVATE to
+# its own MeshLoader.cpp/CookTexture-adjacent sources, never propagated to a consumer, so
+# `editor` needs the include path itself; StbImageImpl.cpp's own comment explains why the
+# STB_IMAGE_IMPLEMENTATION translation unit is a separate file from main.cpp.
+target_include_directories(editor PRIVATE "${CMAKE_SOURCE_DIR}/third_party")
+if(NOT MSVC)
+    # Same "vendored single-header C library triggers this project's own strict warning
+    # flags, not ours to fix" reasoning as engine/CMakeLists.txt already applies to
+    # MeshLoader.cpp for cgltf.h -- scoped to just this one file, not all of `editor`.
+    set_source_files_properties(StbImageImpl.cpp PROPERTIES
+        COMPILE_OPTIONS "-Wno-old-style-cast;-Wno-conversion;-Wno-sign-conversion;-Wno-cast-align;-Wno-double-promotion"
+    )
+endif()
 
 # shaders/m1_unlit.{vert,frag}.spv and assets_cooked/m1_cube.mesh (docs/01 section 12.4,
 # cmake/CookAssets.cmake) -- see that file's comment for what happens to these

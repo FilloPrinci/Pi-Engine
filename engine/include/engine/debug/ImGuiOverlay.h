@@ -61,6 +61,20 @@ public:
     // own geometry draw calls, before vkCmdEndRenderPass (see class comment).
     void Render(VkCommandBuffer commandBuffer);
 
+    // Registers a sampled image for display via ImGui::Image()/ImageButton() -- the
+    // Editor's own Asset Browser thumbnails (post-Editor-E8,
+    // docs/07-unity-parity-analysis.md's Asset Browser row) are the first consumer, but
+    // this is deliberately generic, not thumbnail-specific. `imageView`/`sampler` must
+    // already be in (or transition to) VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL and must
+    // outlive the returned handle -- this call does not take ownership of either, it only
+    // registers them with the ImGui Vulkan backend's own descriptor pool. Returns the
+    // opaque handle ImGui::Image() expects as its texture id; call UnregisterTexture()
+    // with it once the underlying image is being destroyed (e.g. an RHITexture going out
+    // of scope), or the backend's descriptor pool leaks that slot for the rest of the
+    // process.
+    VkDescriptorSet RegisterTexture(VkImageView imageView, VkSampler sampler);
+    void UnregisterTexture(VkDescriptorSet descriptorSet);
+
 private:
     rhi::RHIContext* m_context = nullptr;
     platform::SDL2DisplayBackend* m_displayBackend = nullptr;

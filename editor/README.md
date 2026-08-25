@@ -673,5 +673,96 @@ a new entity, then Ctrl-clicking again -- was caught this same way and fixed by 
 `applySelectionClick()` collapse back to just the primary before applying its own toggle
 whenever `selectedEntities` no longer actually contains it). 95/95 tests pass on Pi4.
 
+**Asset Browser: subfolders, thumbnails, drag-drop (2026-08-25).** The fifth and last of
+the user's five named items. The largest of the five in practice: real thumbnails meant
+this project's first ImGui-displayed GPU texture, a genuinely new capability rather than
+an extension of anything already built.
+
+- *Subfolders*: `ListDirectoryRecursive()` (new, alongside the existing flat
+  `ListDirectory()`) walks `assets/` recursively, returning paths relative to it with
+  '/' separators (`generic_string()`, so a Windows build never leaks a native '\\' into
+  a string this code later splits on '/'). The Source Assets panel renders it as a real
+  folder tree (`renderSourceAssetTree()`, a `std::function` since it recurses into
+  itself) -- groups paths by their next path component under the current prefix, the
+  same "group by common prefix" idea the Hierarchy panel's own `renderEntityNode()`
+  already uses for parent/child, just keyed by a path string instead of `Entity::parent`.
+  Folders use `ImGui::TreeNode()` (collapsible, unlike the Hierarchy's own
+  always-expanded rows -- that panel's comment explains why it avoided TreeNode after an
+  earlier indent-leak bug tied specifically to *entity* IDs reused across
+  destroy/recreate; a filesystem path is a stable string with no such reuse, so the
+  concern doesn't carry over here). Cooked Output stays flat and non-recursive --
+  GUID-named Cooker output is never user-organized into folders, so there was nothing
+  real to test there.
+- *Thumbnails*: `ImGuiOverlay` gained `RegisterTexture()`/`UnregisterTexture()`, thin
+  wrappers around `ImGui_ImplVulkan_AddTexture()`/`_RemoveTexture()` -- kept the raw
+  `imgui_impl_vulkan.h` an implementation detail of `engine_core` (PRIVATE include, per
+  `third_party/README.md`) rather than exposing it to `editor` directly. A new
+  `getOrCreateThumbnail()` decodes a `.png` via `stbi_load()` (`editor` gained its own
+  `third_party` include path + a dedicated `StbImageImpl.cpp` translation unit --
+  `engine_core` already vendors the same header, but only PRIVATE to its own
+  MeshLoader.cpp/CookTexture-adjacent sources, never propagated to a consumer) and
+  uploads it through the existing `RHITexture::InitWithData()` (already leaves the image
+  in `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`, exactly what `AddTexture()` expects),
+  caching the result (or the fact that it isn't a decodable image) forever, matching
+  `sourceAssetNames`' own "read once, no live refresh" precedent. Every other file type
+  (mesh/material/shader) shows a colored type-icon instead (`AssetTypeColor()` +
+  `ImGui::ColorButton`) -- deliberately a real widget, not a Unicode block-element
+  glyph like "■": ImGui's default font only covers Latin-1, so that first attempt
+  rendered as a "missing glyph" placeholder on Pi4 instead of a colored square. A second,
+  nastier bug surfaced during the very same round of Pi4 testing: gating decode
+  attempts on the `.png` extension turned out to matter for correctness, not just
+  performance -- stb_image's TGA loader has no real magic number to key off (unlike
+  PNG/JPEG) and falls back to inspecting the file's byte structure, so calling
+  `stbi_load()` on an arbitrary `.gltf`/`.glb`/`.material.json` file could (and did)
+  spuriously "succeed" as a tiny garbage TGA decode instead of cleanly failing --
+  visible on Pi4 as a glitchy noise icon where a clean colored square was expected.
+  Restricting the decode attempt to files actually ending in `.png` up front (this
+  project's own asset pipeline never produces/consumes any other source texture format,
+  CLAUDE.md's own dependency table) closed it.
+- *Drag-drop*: a shared `kSourceAssetPayloadId` payload (the dragged file's own relative
+  path, copied into a fixed-size buffer the same way the Hierarchy's own
+  `PI_ENGINE_HIERARCHY_ENTITY` payload copies a fixed-size `Entity`) with two drop
+  targets, each ignoring a payload whose extension it doesn't accept: the Inspector's
+  "Assign Material" section (a `.material.json`, reading its GUID via the same
+  `TryReadAssetMetaGuid()` the selected-asset GUID display already uses) and the Scene
+  View itself (a `.gltf`/`.glb`, spawning a new entity via the existing
+  `createEntityWithUndo()`, parallel to the Hierarchy panel's own "Create Cube" button).
+  The Scene View drop needed a different mechanism than the other two -- no ImGui window
+  actually covers it (`ImGuiDockNodeFlags_PassthruCentralNode`, the dockspace setup), so
+  there's no widget to hang a normal `BeginDragDropTarget()` off. `ImGui::GetDragDropPayload()`
+  (a documented, public "peek from anywhere" API, not `imgui_internal.h`) peeks the active
+  payload directly instead, gated the same "released, and not hovering any ImGui panel"
+  way every other viewport gesture in this file already is.
+- A genuine, unrelated **build-tooling gotcha hit while iterating on this feature**, worth
+  recording since it cost real time this session: a backgrounded `nohup cmake --build ...
+  & disown` over SSH sometimes printed a fully plausible-looking successful build log
+  (real compile/link step lines, exit implied success) *without the binary on disk
+  actually changing* -- confirmed by comparing the binary's own mtime against the
+  source's. The exact cause wasn't pinned down (not a clock-skew issue between the two
+  machines, ruled out directly), but running the same `cmake --build` invocation in the
+  *foreground* over SSH instead reliably rebuilt correctly every time. Launching the
+  long-running `editor` process itself via the same `nohup ... & disown` pattern never
+  showed this problem (used successfully throughout this whole session) -- the issue
+  seems specific to a short-lived build command's own child-process lifecycle under a
+  backgrounded, disowned shell, not backgrounding in general.
+
+**Verified on Pi4**: the folder tree (a temporary `assets/textures/sub_checker.png` added
+directly on the remote copy only, never committed -- the real repo's own `assets/` has no
+subfolders yet to exercise this against) correctly showed a collapsible "textures" node
+that expanded to reveal the nested file, still with its own real thumbnail; real `.png`
+thumbnails (`m7_checker.png`, `editor/README's own layout screenshot reused as
+`engine_layout.png`) rendered as actual decoded image previews; mesh/material files
+rendered as solid colored squares (blue/orange) after both bugs above were fixed; the
+Inspector's "Assign Material" section showed the new "(drop a .material.json here)" hint
+correctly under both the empty-materials and populated-materials states -- all
+screenshot-confirmed. **Testing note, not a code gap**: the actual drag-and-drop gestures
+themselves (dragging a file out of the tree and releasing it over a drop target) could not
+be exercised live -- the same `wlrctl` held-drag limitation as every other drag feature
+this session -- verified by code review instead. 95/95 tests pass on Pi4.
+
+This closes all five of the user's originally-named items (Console filters, Hierarchy
+drag-and-drop, mouse-look, the full gizmo, and now the Asset Browser) -- see
+`docs/07-unity-parity-analysis.md` for what's next.
+
 See the roadmap doc for what's explicitly deferred to later steps, and
 `docs/07-unity-parity-analysis.md` for what's missing relative to Unity's own editor.

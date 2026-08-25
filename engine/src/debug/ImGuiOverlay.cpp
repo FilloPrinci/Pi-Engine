@@ -106,4 +106,12 @@ void ImGuiOverlay::Render(VkCommandBuffer commandBuffer) {
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
 }
 
+VkDescriptorSet ImGuiOverlay::RegisterTexture(VkImageView imageView, VkSampler sampler) {
+    return ImGui_ImplVulkan_AddTexture(sampler, imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+}
+
+void ImGuiOverlay::UnregisterTexture(VkDescriptorSet descriptorSet) {
+    ImGui_ImplVulkan_RemoveTexture(descriptorSet);
+}
+
 } // namespace engine::debug

@@ -129,11 +129,16 @@ Translate/Rotate/Scale gizmo with a Local/Global toggle (Scale always stays loca
 non-uniform world-space scale would shear the mesh) and Ctrl-click multi-select in both
 the viewport and the Hierarchy — a multi-entity drag applies the same delta to every
 selected entity independently, each around its own origin, as one combined undo step;
-the Inspector still edits only the last-clicked "primary" entity. See
-[`editor/README.md`](editor/README.md) for the full technical writeup, including the
-testing-tool limitation (`wlrctl`, this project's remote-Pi4 input tool, can't synthesize
-a held mouse-drag or a modifier+click combo) that meant the actual drag mechanics were
-verified by code review rather than a live recording.
+the Inspector still edits only the last-clicked "primary" entity. Last, the Asset Browser's
+Source Assets panel is now a real, collapsible folder tree instead of a flat list, with a
+thumbnail column — a real decoded-image preview for a `.png` (this project's first
+ImGui-displayed GPU texture) or a colored type-icon otherwise — and drag-and-drop: a
+dragged mesh onto the Scene View spawns a new entity with it, a dragged material onto the
+Inspector's "Assign Material" section assigns it. See [`editor/README.md`](editor/README.md)
+for the full technical writeup, including the testing-tool limitation (`wlrctl`, this
+project's remote-Pi4 input tool, can't synthesize a held mouse-drag or a modifier+click
+combo) that meant the actual drag mechanics were verified by code review rather than a
+live recording.
 
 ## Prerequisites
 

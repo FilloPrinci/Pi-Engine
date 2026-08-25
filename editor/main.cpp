@@ -289,6 +289,45 @@ void TrackFieldEdit(UndoStack& undoStack, World& world, Entity entity, const T& 
     }
 }
 
+// Reparenting (post-Editor-E8) -- shared by the Inspector's own "Parent" combo and the
+// Hierarchy panel's drag-and-drop reparenting (docs/07-unity-parity-analysis.md's
+// Hierarchy row, the user's own explicit request): an instant, discrete action with no
+// drag *gesture* to batch through TrackFieldEdit() (the entity handle itself never
+// changes, unlike a DragFloat's own value), so this pushes directly onto `undoStack`
+// instead. No-ops (does nothing, pushes nothing) if `entity` has no Transform, if
+// `newParent` is `entity` itself, if `entity` already has `newParent` as its own parent,
+// or if `newParent` is anywhere in `entity`'s own descendant chain -- that last check
+// matters here in a way it didn't for TrackFieldEdit's own callers: the Inspector's combo
+// never even *lists* such a candidate (it filters via World::IsDescendantOf() before
+// populating the dropdown), but the Hierarchy panel's drag target has no such pre-filtered
+// list to lean on, so a cycle-would-result check has to live here instead, where both
+// callers benefit from it.
+void SetParentWithUndo(UndoStack& undoStack, World& world, Entity entity, Entity newParent) {
+    TransformComponent* transform = world.GetTransform(entity);
+    if (transform == nullptr || entity == newParent) {
+        return;
+    }
+    if (newParent != engine::ecs::kInvalidEntity && world.IsDescendantOf(newParent, entity)) {
+        return; // Would create a cycle.
+    }
+    const Entity oldParent = transform->parent;
+    if (oldParent == newParent) {
+        return;
+    }
+    transform->parent = newParent;
+    undoStack.Push(
+        [&world, entity, oldParent]() {
+            if (TransformComponent* t = world.GetTransform(entity)) {
+                t->parent = oldParent;
+            }
+        },
+        [&world, entity, newParent]() {
+            if (TransformComponent* t = world.GetTransform(entity)) {
+                t->parent = newParent;
+            }
+        });
+}
+
 // Material property editing (post-Editor-E8, ShaderPropertySchema.h) -- returns a mutable
 // reference to `material`'s entry for `decl.name`, (re)initializing it from the shader's
 // own declared default first if it's missing or stored as a different type than `decl`
@@ -1249,6 +1288,15 @@ int main(int argc, char** argv) {
     camera.target = glm::vec3(0.0f, 1.0f, 0.0f);
     camera.distance = 12.0f;
     camera.pitch = 0.5f;
+
+    // Mouse-look (docs/07-unity-parity-analysis.md's Scene View navigation row, the
+    // user's own explicit request) -- persisted across frames the same way `camera`
+    // itself is, so a held right-mouse-drag's delta can be computed against the *previous*
+    // frame's own mouse position (see the onUpdate lambda's own comment on why it's gated
+    // on `mouseLookActive` rather than a raw button check each frame).
+    bool mouseLookActive = false;
+    float lastMouseLookX = 0.0f;
+    float lastMouseLookY = 0.0f;
     glm::mat4 currentViewProj(1.0f);
     glm::vec3 currentCameraWorldPosition(0.0f); // Lighting phase A -- Blinn-Phong's view
                                                 // direction (m_forward_lit_shaded.frag).
@@ -1320,6 +1368,20 @@ int main(int argc, char** argv) {
     // --- Asset Browser selection (Editor step E6) -- filename only (not a full path);
     //     empty means nothing selected. ---
     std::string selectedSourceAsset;
+
+    // --- Console: severity filter + collapse duplicates (docs/07-unity-parity-analysis.md's
+    //     Console panel row, the user's own explicit request). This project's own logging
+    //     convention (CLAUDE.md) has exactly one severity axis worth filtering on --
+    //     std::printf() (captured as "Info") vs std::fprintf(stderr, ...) (captured as
+    //     "Error", Console::Line::isError) -- there's no separate Warning level to filter
+    //     on top of that, unlike Unity's three-way split. Deliberately *not* attempting
+    //     click-to-source: every existing log call site is a plain std::printf/fprintf with
+    //     no structured file:line metadata attached, so there's nothing reliable to jump to
+    //     without rewriting every call site across the engine to a real logging macro --
+    //     a much larger, separate undertaking than "the Console panel gained filters". ---
+    bool consoleShowInfo = true;
+    bool consoleShowErrors = true;
+    bool consoleCollapse = false;
 
     // --- Project Hub: Open/New scene file (post-E8, direct extension of the recent-
     //     projects list above -- the user's own explicit request to manage "the project"
@@ -1637,6 +1699,27 @@ int main(int argc, char** argv) {
                 if (ImGui::Selectable(label.c_str(), entity == selectedEntity)) {
                     selectedEntity = entity;
                 }
+                // Drag-and-drop reparenting (docs/07-unity-parity-analysis.md's Hierarchy
+                // row, the user's own explicit request) -- dragging one row and dropping
+                // it onto another makes the drop target the dragged entity's new parent,
+                // through the exact same SetParentWithUndo() the Inspector's own "Parent"
+                // combo uses (that function's own comment covers the cycle-safety check,
+                // which matters here in a way it didn't for the combo -- the combo never
+                // even lists a would-cycle candidate, but a drag target has no such
+                // pre-filtered list to lean on).
+                if (ImGui::BeginDragDropSource()) {
+                    ImGui::SetDragDropPayload("PI_ENGINE_HIERARCHY_ENTITY", &entity, sizeof(Entity));
+                    ImGui::TextUnformatted(label.c_str());
+                    ImGui::EndDragDropSource();
+                }
+                if (ImGui::BeginDragDropTarget()) {
+                    if (const ImGuiPayload* payload =
+                            ImGui::AcceptDragDropPayload("PI_ENGINE_HIERARCHY_ENTITY")) {
+                        const Entity dragged = *static_cast<const Entity*>(payload->Data);
+                        SetParentWithUndo(undoStack, world, dragged, entity);
+                    }
+                    ImGui::EndDragDropTarget();
+                }
                 // Right-click context menu (post-Editor-E8) -- BeginPopupContextItem()
                 // targets whichever ImGui item was rendered immediately before it, i.e.
                 // this exact Selectable, so each row gets its own independent popup.
@@ -1652,6 +1735,20 @@ int main(int argc, char** argv) {
             }
         };
         renderEntityNode(engine::ecs::kInvalidEntity, 0);
+
+        // Drop zone for "un-parent to root" -- fills whatever vertical space is left in
+        // the panel below the tree itself, so dropping a dragged row anywhere in that
+        // empty area (not onto another specific row) clears its parent. Invisible
+        // (Dummy()) since it's just a drop target, not something meant to be seen.
+        ImGui::Dummy(ImGui::GetContentRegionAvail());
+        if (ImGui::BeginDragDropTarget()) {
+            if (const ImGuiPayload* payload =
+                    ImGui::AcceptDragDropPayload("PI_ENGINE_HIERARCHY_ENTITY")) {
+                const Entity dragged = *static_cast<const Entity*>(payload->Data);
+                SetParentWithUndo(undoStack, world, dragged, engine::ecs::kInvalidEntity);
+            }
+            ImGui::EndDragDropTarget();
+        }
 
         if (entityPendingDelete != engine::ecs::kInvalidEntity) {
             // Snapshot before touching anything -- CaptureEntitySnapshot() records every
@@ -1727,30 +1824,10 @@ int main(int argc, char** argv) {
                     const std::string currentParentLabel = transform->parent == engine::ecs::kInvalidEntity
                                                                 ? "None"
                                                                 : EntityLabel(transform->parent);
-                    // One combined undo step per reparent (an instant, discrete action --
-                    // no drag gesture to batch, unlike the DragFloat*s below, so this
-                    // pushes directly instead of going through TrackFieldEdit()).
-                    auto reparentWithUndo = [&](Entity newParent) {
-                        const Entity oldParent = transform->parent;
-                        if (oldParent == newParent) {
-                            return;
-                        }
-                        transform->parent = newParent;
-                        undoStack.Push(
-                            [&world, entity = selectedEntity, oldParent]() {
-                                if (TransformComponent* t = world.GetTransform(entity)) {
-                                    t->parent = oldParent;
-                                }
-                            },
-                            [&world, entity = selectedEntity, newParent]() {
-                                if (TransformComponent* t = world.GetTransform(entity)) {
-                                    t->parent = newParent;
-                                }
-                            });
-                    };
                     if (ImGui::BeginCombo("Parent", currentParentLabel.c_str())) {
                         if (ImGui::Selectable("None", transform->parent == engine::ecs::kInvalidEntity)) {
-                            reparentWithUndo(engine::ecs::kInvalidEntity);
+                            SetParentWithUndo(undoStack, world, selectedEntity,
+                                              engine::ecs::kInvalidEntity);
                         }
                         for (const Entity candidate : world.Transforms().Entities()) {
                             if (candidate == selectedEntity ||
@@ -1760,7 +1837,7 @@ int main(int argc, char** argv) {
                             const std::string candidateLabel = EntityLabel(candidate);
                             if (ImGui::Selectable(candidateLabel.c_str(),
                                                   candidate == transform->parent)) {
-                                reparentWithUndo(candidate);
+                                SetParentWithUndo(undoStack, world, selectedEntity, candidate);
                             }
                         }
                         ImGui::EndCombo();
@@ -2060,10 +2137,10 @@ int main(int argc, char** argv) {
                     const bool isBox = collider->shapeType == ColliderComponent::ShapeType::Box;
                     // Shape switching (post-Editor-E8, "make everything the Editor shows
                     // manageable" phase 3) -- pushed directly to undoStack rather than
-                    // through TrackFieldEdit(), same reasoning reparentWithUndo() above
-                    // gives: an instant, discrete combo selection has no drag gesture to
-                    // batch, so there's no IsItemActivated()/IsItemDeactivatedAfterEdit()
-                    // pair to hook.
+                    // through TrackFieldEdit(), same reasoning SetParentWithUndo() gives:
+                    // an instant, discrete combo selection has no drag gesture to batch,
+                    // so there's no IsItemActivated()/IsItemDeactivatedAfterEdit() pair to
+                    // hook.
                     auto setShapeWithUndo = [&](ColliderComponent::ShapeType newShape) {
                         const ColliderComponent::ShapeType oldShape = collider->shapeType;
                         if (oldShape == newShape) {
@@ -2366,15 +2443,44 @@ int main(int argc, char** argv) {
                 console.Clear();
             }
             ImGui::SameLine();
+            ImGui::Checkbox("Info", &consoleShowInfo);
+            ImGui::SameLine();
+            ImGui::Checkbox("Errors", &consoleShowErrors);
+            ImGui::SameLine();
+            ImGui::Checkbox("Collapse", &consoleCollapse);
+            ImGui::SameLine();
             ImGui::Text("%zu line(s)", console.GetLines().size());
             ImGui::Separator();
             ImGui::BeginChild("ConsoleScroll", ImVec2(0.0f, 0.0f), false,
                               ImGuiWindowFlags_HorizontalScrollbar);
-            for (const Console::Line& line : console.GetLines()) {
+            const std::deque<Console::Line>& lines = console.GetLines();
+            for (std::size_t i = 0; i < lines.size(); ++i) {
+                const Console::Line& line = lines[i];
+                if ((line.isError && !consoleShowErrors) || (!line.isError && !consoleShowInfo)) {
+                    continue;
+                }
+                // Collapse duplicates (Unity's own "Collapse" toggle) -- merges however
+                // many *immediately following* lines are an exact duplicate (same text +
+                // severity) into this one row with a "(xN)" suffix, rather than a separate
+                // global-count data structure; a pure display-time transform over
+                // Console::GetLines(), Console.h/.cpp itself stays untouched. Close enough
+                // to Unity's own behavior at this project's much smaller log volumes.
+                int repeatCount = 1;
+                if (consoleCollapse) {
+                    while (i + 1 < lines.size() && lines[i + 1].text == line.text &&
+                           lines[i + 1].isError == line.isError) {
+                        ++repeatCount;
+                        ++i;
+                    }
+                }
+                std::string display = line.text;
+                if (repeatCount > 1) {
+                    display += " (x" + std::to_string(repeatCount) + ")";
+                }
                 if (line.isError) {
-                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", line.text.c_str());
+                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", display.c_str());
                 } else {
-                    ImGui::TextUnformatted(line.text.c_str());
+                    ImGui::TextUnformatted(display.c_str());
                 }
             }
             if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
@@ -2535,6 +2641,31 @@ int main(int argc, char** argv) {
         const float viewportHeight = static_cast<float>(swapchain.GetExtent().height);
         const bool mouseOverImGui = ImGui::GetIO().WantCaptureMouse;
         const glm::vec2 mouseScreen(inputSystem.GetMouseX(), inputSystem.GetMouseY());
+
+        // Mouse-look (docs/07-unity-parity-analysis.md's Scene View navigation row) --
+        // hold the right mouse button and drag to orbit, same gate-only-the-*start*-on-
+        // WantCaptureMouse reasoning the gizmo drag just below already uses: starting a
+        // look while hovering an ImGui panel is refused, but an already-started one keeps
+        // updating even if the mouse strays over a panel mid-drag (so releasing the button
+        // over a panel doesn't leave the camera "stuck" mid-look). Additive, not a
+        // replacement for the existing A/D/W/S keyboard orbit above -- both stay available
+        // at once, matching every other "keyboard is the baseline, mouse is an addition"
+        // control this Editor already has.
+        constexpr float kMouseLookSensitivity = 0.005f; // radians per pixel of movement.
+        if (input.mouseRightHeld && (mouseLookActive || !mouseOverImGui)) {
+            if (mouseLookActive) {
+                const float deltaX = mouseScreen.x - lastMouseLookX;
+                const float deltaY = mouseScreen.y - lastMouseLookY;
+                camera.yaw += deltaX * kMouseLookSensitivity;
+                camera.pitch = std::max(
+                    kMinPitch, std::min(kMaxPitch, camera.pitch - deltaY * kMouseLookSensitivity));
+            }
+            mouseLookActive = true;
+            lastMouseLookX = mouseScreen.x;
+            lastMouseLookY = mouseScreen.y;
+        } else {
+            mouseLookActive = false;
+        }
 
         // Hierarchy (post-Editor-E8, docs/07-unity-parity-analysis.md): the gizmo is drawn
         // and hit-tested at an entity's *world* position (its own local position composed

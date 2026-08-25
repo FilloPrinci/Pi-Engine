@@ -41,6 +41,12 @@ struct InputState {
     float mouseX = 0.0f;
     float mouseY = 0.0f;
     bool mouseLeftHeld = false;
+    // Right button (post-E8, the Editor's own mouse-look camera control,
+    // docs/07-unity-parity-analysis.md's Scene View navigation row) -- same "live query,
+    // no edge detection here" shape as mouseLeftHeld, but doesn't need that field's own
+    // same-poll-click-and-release latching: a mouse-look drag is inherently held across
+    // many frames, not a single fast click a poll could miss entirely.
+    bool mouseRightHeld = false;
 };
 
 } // namespace engine::platform

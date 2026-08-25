@@ -119,6 +119,9 @@ void SDL2DisplayBackend::PollEvents(InputState& out) {
     out.mouseY = static_cast<float>(mouseYInt);
     out.mouseLeftHeld =
         mouseLeftDownEventThisPoll || (mouseButtons & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
+    // Right button (post-E8, mouse-look) -- no same-poll-click-and-release latch needed
+    // here, see InputState::mouseRightHeld's own comment for why.
+    out.mouseRightHeld = (mouseButtons & SDL_BUTTON(SDL_BUTTON_RIGHT)) != 0;
 }
 
 core::Extent2D SDL2DisplayBackend::GetDrawableSize() {

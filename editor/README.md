@@ -559,5 +559,45 @@ hardware, same precedent every other rendering feature in this codebase already 
 `demo.scene.json` confirmed byte-identical on disk after killing the process (`Save` never
 clicked during testing).
 
+**Console filters, Hierarchy drag-and-drop, mouse-look (2026-08-25).** The user picked
+four more items straight off `docs/07-unity-parity-analysis.md`'s gap table to work
+through in sequence; these three are the smaller/contained ones, done first.
+
+- *Console*: "Info"/"Errors" checkboxes filter which severity shows (this project's own
+  logging has exactly that one axis -- `std::printf()` vs `std::fprintf(stderr, ...)`, no
+  separate Warning level to filter on top of it); a "Collapse" checkbox merges
+  immediately-adjacent identical lines into one row with a "(xN)" suffix -- a pure
+  display-time transform over `Console::GetLines()`, `Console.h`/`.cpp` themselves
+  untouched. Deliberately did **not** attempt click-to-source: every log call site is a
+  plain `printf`/`fprintf` with no structured file:line metadata to jump to, and adding
+  that would mean rewriting every call site across the engine to a real logging macro --
+  a much bigger, separate undertaking than "the Console panel gained filters."
+- *Hierarchy drag-and-drop*: dragging one row and dropping it onto another reparents the
+  dragged entity under the drop target; dropping onto the empty space below the tree
+  un-parents it to root. Both go through a new `SetParentWithUndo()` (hoisted out of what
+  used to be a `selectedEntity`-only local lambda inside the Inspector's own "Parent"
+  combo, now a proper standalone function both call) -- cycle-safety (refusing to drop an
+  entity onto one of its own descendants) had to move *into* that function for the drag
+  case specifically: the Inspector's combo never even lists a would-cycle candidate
+  (pre-filtered via `World::IsDescendantOf()`), but a drag target has no such pre-filtered
+  list to lean on.
+- *Mouse-look*: hold the right mouse button and drag in the viewport to orbit -- additive
+  to the existing A/D/W/S keyboard orbit, not a replacement. `InputState` gained
+  `mouseRightHeld` (`SDL2DisplayBackend`'s own live `SDL_GetMouseState()` query, no same-
+  poll click-latch needed the way `mouseLeftHeld` has, since a look-drag is inherently
+  held across many frames). Gated the same way the existing gizmo drag already is:
+  starting a look while hovering an ImGui panel is refused, but an already-started one
+  keeps updating even if the mouse strays over a panel mid-drag.
+
+**Testing note, not a code gap**: none of these three could be exercised as a genuine
+*held-button-then-move* gesture over VNC -- `wlrctl pointer` has no primitive for that
+(only an atomic `click` and a separate `move`, confirmed already for the gizmo drag
+itself, see `unity-parity-followups` memory) -- so the Hierarchy drag-and-drop and mouse-
+look were verified by careful code review instead (the same direction/sign conventions as
+the existing keyboard controls, the same cycle-safety reasoning the Inspector's combo
+already established) plus confirming a plain right-click in the viewport causes no crash
+or stuck state. The Console filters *were* fully exercised live (screenshot-confirmed
+toggling "Errors" off hides the red lines, back on restores them).
+
 See the roadmap doc for what's explicitly deferred to later steps, and
 `docs/07-unity-parity-analysis.md` for what's missing relative to Unity's own editor.

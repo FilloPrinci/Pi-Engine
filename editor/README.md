@@ -599,5 +599,79 @@ already established) plus confirming a plain right-click in the viewport causes 
 or stuck state. The Console filters *were* fully exercised live (screenshot-confirmed
 toggling "Errors" off hides the red lines, back on restores them).
 
+**Gizmo Rotate/Scale, Local/Global toggle, multi-select (2026-08-25).** The last item off
+the same list, and the largest: the gizmo was translate-only through the work above; this
+extends it to a full `GizmoMode { Translate, Rotate, Scale }` (toolbar buttons switch
+mode), a Local/Global toggle, and Ctrl-click multi-select.
+
+- *Translate/Scale*, generalized: both already drew three straight axis lines (circle
+  tips for Translate, now square tips for Scale) hit-tested via `DistancePointToSegment`
+  -- what changed is the axis *direction* itself now comes from a new `gizmoAxisBasis()`
+  helper, either the fixed world unit axes (Global) or the entity's own normalized
+  world-rotation basis columns (Local), instead of always being hardcoded world axes.
+  Scale ignores the toggle and always uses the local basis regardless -- a non-uniform
+  *world*-space scale would shear the mesh, not a supported operation here, matching
+  Unity's own Scale gizmo (which likewise never offers a Global mode).
+- *Rotate*, genuinely new: each axis draws as a ring, approximated as 32 straight
+  segments in screen space (`ringPoint()`, shared by hit-testing and drawing so the
+  drawn geometry always matches what's clickable) -- hit-tested the same
+  `DistancePointToSegment` way, segment-by-segment around the ring. The drag angle
+  itself comes from `atan2()` of the mouse around the gizmo's own screen-space origin
+  (captured once at drag-start, not recomputed from a *rotating* entity's position mid-
+  drag, which would drift), not from projecting onto the ring's tangent -- simpler, and
+  the same tradeoff Unity's own screen-space rotate gizmo makes. Applying the resulting
+  delta needed real quaternion-composition care: Local mode post-multiplies the entity's
+  own starting rotation by `angleAxis(deltaAngle, canonicalAxis)` (rotate around the
+  entity's own current axis); Global mode has to first convert the *world* axis into the
+  entity's parent's local frame (`inverse(parentBasis) * worldAxis`, `parentBasis` the
+  parent's own world rotation normalized back to a pure-rotation basis -- its world
+  matrix may carry scale, which a rotation axis must ignore) and then pre-multiply
+  instead. Both modes coincide for a root entity with no parent, same as every other
+  local-vs-global helper in this codebase.
+- *Local/Global toggle*: one button, labeled with whichever mode is currently active,
+  flips `gizmoLocalSpace` -- read by `gizmoAxisBasis()` (Translate/Rotate's axis
+  direction) and the Rotate drag-update above; Scale never reads it, per its own
+  always-local rule above.
+- *Multi-select*: Ctrl-click (in either the viewport or the Hierarchy panel) toggles an
+  entity's membership in a new `selectedEntities` list, going through one shared
+  `applySelectionClick()` helper both call; a plain click still just replaces the whole
+  selection with one entity, unchanged from before. Deliberately narrow scope, not full
+  Unity parity: `selectedEntity` stays the single "primary" the Inspector edits and
+  right-click Delete targets -- neither of those call sites had to change or even learn
+  multi-select exists. `selectedEntities` is treated as authoritative only while it
+  still actually contains the current primary (`isEntitySelected()`/
+  `currentMultiSelection()`/`applySelectionClick()` all check this); the half-dozen
+  existing call sites that already assign `selectedEntity` directly (Create Empty/Cube,
+  Delete, their own Undo/Redo closures) don't need updating either -- any of them
+  changing `selectedEntity` without touching `selectedEntities` naturally collapses a
+  multi-selection back down to just the entity involved, correctly, with zero code
+  changes at those sites. A multi-entity gizmo drag captures every selected entity's own
+  starting position/rotation/scale at drag-start (`GizmoDragEntry`, snapshotted from
+  `currentMultiSelection()`) and applies the identical delta to each of them
+  independently -- each still around its own origin, no pivot/center-of-selection mode
+  -- with the gizmo widget itself always staying anchored to the primary entity's own
+  position/basis. Drag-release pushes one combined Undo/Redo step covering every entity
+  that actually ended up changed, not one step per entity.
+- Ctrl detection reads ImGui's own `io.KeyCtrl`, not a new `InputState` key -- the same
+  source the existing Ctrl+Z/Ctrl+Y undo shortcut already reads, since this is an
+  Editor-UI-only gesture no runtime script needs to see.
+
+**Verified on Pi4**: the mode-toggle buttons (Translate/Rotate/Scale), the Local/Global
+toggle, and plain single-select were all exercised live via `wlrctl` with screenshots --
+confirmed the toolbar's disabled/enabled button state tracks the active mode correctly,
+and that the drawn gizmo shape changes correctly per mode (straight lines + circle tips
+for Translate, three colored rings for Rotate, straight lines + square tips for Scale),
+including a visibly tilted Local-mode gizmo matching a rotated entity's own basis versus
+the world-aligned Global one. **Testing note, not a code gap**: the actual drag mechanics
+(Rotate's angle math, Scale's per-axis delta, multi-entity apply) and Ctrl-click toggling
+itself could not be exercised live -- `wlrctl` has no primitive for a genuine held-drag
+(same limitation as the Hierarchy drag-and-drop above) *and* no way to hold a modifier
+key across a separate pointer-click invocation, so both were verified by careful code
+review instead (the quaternion composition was derived and checked algebraically before
+writing any code; a stale-`selectedEntities` edge case -- multi-selecting, then creating
+a new entity, then Ctrl-clicking again -- was caught this same way and fixed by having
+`applySelectionClick()` collapse back to just the primary before applying its own toggle
+whenever `selectedEntities` no longer actually contains it). 95/95 tests pass on Pi4.
+
 See the roadmap doc for what's explicitly deferred to later steps, and
 `docs/07-unity-parity-analysis.md` for what's missing relative to Unity's own editor.

@@ -118,6 +118,23 @@ computes per fragment, evaluated once per vertex instead (cheaper on Pi4's TBDR 
 docs/01 section 8.3's own "vertex lighting or minimal Blinn-Phong" wording), optionally
 textured, falling back to the material's own tint as albedo when no texture is assigned.
 
+**Editor UX follow-ups**: a round of smaller, explicitly user-requested gaps off
+`docs/07-unity-parity-analysis.md` closed together. The Console panel gained
+severity-filter checkboxes and a "Collapse" toggle for repeated lines. The Hierarchy
+panel gained drag-and-drop reparenting (drag one row onto another, or onto the empty
+space below the tree to un-parent to root) alongside the existing Parent combo box. The
+Scene View gained mouse-look — hold the right mouse button and drag to orbit, additive to
+the existing keyboard controls. And the gizmo grew from translate-only into a full
+Translate/Rotate/Scale gizmo with a Local/Global toggle (Scale always stays local, a
+non-uniform world-space scale would shear the mesh) and Ctrl-click multi-select in both
+the viewport and the Hierarchy — a multi-entity drag applies the same delta to every
+selected entity independently, each around its own origin, as one combined undo step;
+the Inspector still edits only the last-clicked "primary" entity. See
+[`editor/README.md`](editor/README.md) for the full technical writeup, including the
+testing-tool limitation (`wlrctl`, this project's remote-Pi4 input tool, can't synthesize
+a held mouse-drag or a modifier+click combo) that meant the actual drag mechanics were
+verified by code review rather than a live recording.
+
 ## Prerequisites
 
 - CMake ≥ 3.24, Ninja (Linux/macOS) or Visual Studio 2022 (Windows).

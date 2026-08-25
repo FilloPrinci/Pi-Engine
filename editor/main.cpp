@@ -40,6 +40,13 @@
 // in transitively by any engine header this file already includes (Camera.h only uses
 // these internally, in Camera.cpp, not in its own public API).
 #include <glm/gtc/matrix_transform.hpp>
+// glm::angleAxis (the rotate gizmo's own delta-quaternion construction) and glm::two_pi
+// (the rotate gizmo's ring geometry) -- explicit for the same reason as
+// gtc/matrix_transform.hpp above, even though TransformComponent.h already pulls in
+// enough of glm/gtc/quaternion.hpp transitively for the euler-angle constructor already
+// used elsewhere in this file.
+#include <glm/gtc/constants.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <volk.h>
 
 #include <algorithm>
@@ -58,6 +65,7 @@
 #include <string_view>
 #include <system_error>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 using engine::asset::AssetGuid;
@@ -1313,6 +1321,82 @@ int main(int argc, char** argv) {
     //     been destroyed since (not possible yet -- nothing destroys entities in the
     //     Editor -- but the check costs nothing and stays correct once something does). ---
     Entity selectedEntity = engine::ecs::kInvalidEntity;
+    // Multi-select (docs/07-unity-parity-analysis.md's Object selection/manipulation row,
+    // the user's own explicit request) -- deliberately narrow scope: `selectedEntity`
+    // stays the single "primary" selection every other panel already keys off (the
+    // Inspector still edits only it, right-click Delete in the Hierarchy still only
+    // targets it), so none of that existing code needs to change. `selectedEntities` is
+    // purely additive -- it drives the Hierarchy's multi-row highlight and lets the
+    // gizmo apply the same drag delta to every selected entity at once (each still
+    // around its own origin -- no pivot/center-of-selection mode, matching Unity's own
+    // "component editing" restriction to a single object while still allowing a
+    // multi-object move/rotate/scale). Deliberately NOT kept in sync by every one of the
+    // half-dozen existing call sites that already assign `selectedEntity` directly
+    // (Create Empty/Cube, Delete, their own Undo/Redo closures) -- isEntitySelected() and
+    // currentMultiSelection() below both treat `selectedEntities` as authoritative only
+    // when it still actually contains `selectedEntity`, and fall back to treating
+    // `selectedEntity` alone as a single-entity selection otherwise. That means any of
+    // those existing call sites changing `selectedEntity` without touching
+    // `selectedEntities` naturally (and correctly) collapses a multi-selection back down
+    // to just the entity involved, with no need for any of them to learn multi-select
+    // exists.
+    std::vector<Entity> selectedEntities;
+    // True if `entity` is part of the current selection (primary or otherwise) -- the
+    // Hierarchy panel's own multi-row highlight.
+    auto isEntitySelected = [&](Entity entity) {
+        if (entity == selectedEntity) {
+            return true;
+        }
+        return std::find(selectedEntities.begin(), selectedEntities.end(), entity) !=
+               selectedEntities.end();
+    };
+    // The actual list the gizmo drags every selected entity through -- see
+    // `selectedEntities`'s own comment above for why this falls back to a single-entity
+    // list rather than trusting `selectedEntities` unconditionally.
+    auto currentMultiSelection = [&]() -> std::vector<Entity> {
+        if (selectedEntity == engine::ecs::kInvalidEntity) {
+            return {};
+        }
+        if (std::find(selectedEntities.begin(), selectedEntities.end(), selectedEntity) !=
+            selectedEntities.end()) {
+            return selectedEntities;
+        }
+        return {selectedEntity};
+    };
+    // Shared click-to-select handling for both the Hierarchy panel and viewport picking
+    // below -- a plain click replaces the whole selection with just `entity`; a
+    // Ctrl-click toggles `entity`'s own membership, keeping everything else selected
+    // (Unity's own multi-select convention). Removing the current primary hands
+    // "primary" to whatever's left in the selection, same as Unity does. ImGui's own
+    // io.KeyCtrl (not InputState::keysHeld) -- same source the existing Ctrl+Z/Ctrl+Y
+    // undo shortcut already reads, since this is an Editor-UI-only gesture no runtime
+    // script ever needs to see, not gameplay input.
+    auto applySelectionClick = [&](Entity entity) {
+        if (ImGui::GetIO().KeyCtrl) {
+            // A stale `selectedEntities` (some other call site changed `selectedEntity`
+            // directly without knowing multi-select exists -- see its own comment
+            // above) collapses back to just the current primary before this click's
+            // own toggle is applied, so a leftover selection from before that change
+            // can never silently reappear here.
+            if (selectedEntity != engine::ecs::kInvalidEntity &&
+                std::find(selectedEntities.begin(), selectedEntities.end(), selectedEntity) ==
+                    selectedEntities.end()) {
+                selectedEntities.assign(1, selectedEntity);
+            }
+            const auto it = std::find(selectedEntities.begin(), selectedEntities.end(), entity);
+            if (it != selectedEntities.end()) {
+                selectedEntities.erase(it);
+                selectedEntity =
+                    selectedEntities.empty() ? engine::ecs::kInvalidEntity : selectedEntities.back();
+            } else {
+                selectedEntities.push_back(entity);
+                selectedEntity = entity;
+            }
+        } else {
+            selectedEntities.assign(1, entity);
+            selectedEntity = entity;
+        }
+    };
 
     // --- Viewport picking + translate gizmo (post-E8) -- InputSystem (not raw
     //     InputState::keysHeld/mouseLeftHeld like the camera above) because gizmo
@@ -1326,6 +1410,47 @@ int main(int argc, char** argv) {
     glm::vec3 dragStartEntityPosition(0.0f);
     glm::vec2 dragAxisScreenDir(0.0f);   // unit 2D direction of the dragged axis on screen
     float dragScreenPixelsPerWorldUnit = 1.0f;
+
+    // Rotate/Scale gizmos + Local/Global toggle (docs/07-unity-parity-analysis.md's
+    // Object selection/manipulation row, the user's own explicit request) -- Translate
+    // was the only mode through post-E8; `gizmoMode` now picks which of the three drag
+    // interpretations below applies to `draggingAxis`, and these extra captured-at-drag-
+    // start values cover what Translate's own `dragStartEntityPosition` doesn't (a
+    // rotation delta needs the entity's starting orientation *and* the screen-space angle
+    // the drag began at; a scale delta needs the entity's starting scale).
+    enum class GizmoMode { Translate, Rotate, Scale };
+    GizmoMode gizmoMode = GizmoMode::Translate;
+    bool gizmoLocalSpace = false; // Scale ignores this -- always local, see the drag/draw
+                                  // code's own comment for why.
+    glm::quat dragStartEntityRotation(1.0f, 0.0f, 0.0f, 0.0f);
+    glm::vec3 dragStartEntityScale(1.0f);
+    float dragStartAngleScreen = 0.0f;    // Rotate only: atan2 angle of the mouse around
+                                          // the gizmo's own screen-space origin, at the
+                                          // moment the drag began.
+    glm::vec2 dragGizmoOriginScreen(0.0f); // Rotate only: that same origin, held fixed for
+                                           // the whole drag (recomputing it every frame
+                                           // from a *rotating* entity's own position would
+                                           // be fine for a root entity but drifts for one
+                                           // whose parent is also moving mid-drag).
+
+    // Multi-select gizmo dragging (docs/07-unity-parity-analysis.md's Object
+    // selection/manipulation row, the user's own explicit request) -- one entry per
+    // selected entity, captured at drag-start from currentMultiSelection() (declared
+    // further up, alongside `selectedEntities`), so every mode's drag-update loop below
+    // can apply the same delta to each entity independently around its own captured
+    // starting values, and drag-release can push one combined undo/redo step covering
+    // all of them at once. The gizmo widget itself still only ever hit-tests/draws at
+    // the *primary* selectedEntity's own position/basis -- no pivot/center-of-selection
+    // mode -- dragStartEntityPosition/Rotation/Scale above stay exactly what the
+    // hit-test and Rotate's screen-angle math key off, this is purely the extra set of
+    // entities the resulting delta also gets applied to.
+    struct GizmoDragEntry {
+        Entity entity;
+        glm::vec3 startPosition;
+        glm::quat startRotation;
+        glm::vec3 startScale;
+    };
+    std::vector<GizmoDragEntry> dragSelection;
 
     // --- Undo/Redo (post-Editor-E8, docs/07-unity-parity-analysis.md) -- one stack for
     //     the whole Editor session, not per-entity/per-field. Ctrl+Z/Ctrl+Y (also
@@ -1542,8 +1667,32 @@ int main(int argc, char** argv) {
         ImGui::Text("Entities: %zu mesh", world.Meshes().Data().size());
         ImGui::Text("FPS: %.0f", lastReportedFps);
         ImGui::Separator();
-        ImGui::TextUnformatted("Camera: A/D yaw, W/S pitch, Up/Down zoom");
-        ImGui::TextUnformatted("Viewport: click to select, drag a gizmo axis to move");
+        ImGui::TextUnformatted("Camera: A/D yaw, W/S pitch, Up/Down zoom, right-drag to look");
+        ImGui::TextUnformatted("Viewport: click to select, drag a gizmo handle to edit");
+        ImGui::Separator();
+        // Gizmo mode + space toggle (docs/07-unity-parity-analysis.md's Object selection/
+        // manipulation row, the user's own explicit request) -- Translate/Rotate/Scale
+        // pick which of the three gizmos below is active; Local/Global only affects
+        // Translate and Rotate (Scale is always local -- see the gizmo drawing/drag code's
+        // own comment for why a world-space non-uniform scale isn't a supported operation
+        // here, same as it isn't in most engines). A plain radio-button-style row of
+        // Buttons, not an enum combo, matching Unity's own always-visible toolbar more
+        // closely than a dropdown would.
+        auto gizmoModeButton = [&](const char* label, GizmoMode mode) {
+            ImGui::BeginDisabled(gizmoMode == mode);
+            if (ImGui::Button(label)) {
+                gizmoMode = mode;
+            }
+            ImGui::EndDisabled();
+        };
+        gizmoModeButton("Translate", GizmoMode::Translate);
+        ImGui::SameLine();
+        gizmoModeButton("Rotate", GizmoMode::Rotate);
+        ImGui::SameLine();
+        gizmoModeButton("Scale", GizmoMode::Scale);
+        if (ImGui::Button(gizmoLocalSpace ? "Local" : "Global")) {
+            gizmoLocalSpace = !gizmoLocalSpace;
+        }
         ImGui::Separator();
         // Undo/Redo (post-Editor-E8) -- Ctrl+Z/Ctrl+Y also work (see the keyboard
         // shortcut handling above), these buttons exist for discoverability and so the
@@ -1696,8 +1845,8 @@ int main(int argc, char** argv) {
 
                 const std::string label = EntityLabel(entity);
                 ImGui::Indent(static_cast<float>(depth) * 15.0f);
-                if (ImGui::Selectable(label.c_str(), entity == selectedEntity)) {
-                    selectedEntity = entity;
+                if (ImGui::Selectable(label.c_str(), isEntitySelected(entity))) {
+                    applySelectionClick(entity);
                 }
                 // Drag-and-drop reparenting (docs/07-unity-parity-analysis.md's Hierarchy
                 // row, the user's own explicit request) -- dragging one row and dropping
@@ -2689,52 +2838,244 @@ int main(int argc, char** argv) {
             const glm::mat3 parentRotationScale = glm::mat3(world.GetWorldMatrix(t->parent));
             return glm::inverse(parentRotationScale) * worldDelta;
         };
+        // Rotate's Global mode needs a *world* rotation axis converted into the entity's
+        // own parent's local frame before a delta quaternion can be built and applied
+        // (TransformComponent::rotation is local, same reasoning as worldDeltaToLocal
+        // above) -- the parent's own world rotation, normalized back to a pure-rotation
+        // basis (its world matrix may carry scale, which a rotation axis must ignore).
+        auto parentWorldBasis = [&](Entity entity) {
+            const TransformComponent* t = world.GetTransform(entity);
+            if (t == nullptr || t->parent == engine::ecs::kInvalidEntity) {
+                return glm::mat3(1.0f);
+            }
+            glm::mat3 basis(world.GetWorldMatrix(t->parent));
+            basis[0] = glm::normalize(basis[0]);
+            basis[1] = glm::normalize(basis[1]);
+            basis[2] = glm::normalize(basis[2]);
+            return basis;
+        };
+        // The gizmo's own three drawn/hit-tested axis directions -- world unit axes for
+        // Global mode, or the entity's own normalized world-rotation basis columns for
+        // Local mode (Scale always passes local=true here regardless of gizmoLocalSpace,
+        // see its own call sites below).
+        auto gizmoAxisBasis = [&](Entity entity, bool local) {
+            if (!local) {
+                return glm::mat3(1.0f);
+            }
+            glm::mat3 basis(world.GetWorldMatrix(entity));
+            basis[0] = glm::normalize(basis[0]);
+            basis[1] = glm::normalize(basis[1]);
+            basis[2] = glm::normalize(basis[2]);
+            return basis;
+        };
+        auto axisColumn = [](GizmoAxis axis, const glm::mat3& basis) {
+            if (axis == GizmoAxis::X) {
+                return basis[0];
+            }
+            if (axis == GizmoAxis::Y) {
+                return basis[1];
+            }
+            return basis[2];
+        };
+        // Rotate ring geometry, shared by hit-testing below and drawing further down --
+        // kRingSegments points spaced evenly around `axisDir` at `radius` from
+        // `worldCenter`, approximated as straight segments the same way the
+        // translate/scale axis lines are already exact segments.
+        constexpr int kRingSegments = 32;
+        auto ringPoint = [](const glm::vec3& worldCenter, const glm::vec3& axisDir, float radius,
+                            int index) {
+            const glm::vec3 arbitrary = std::abs(axisDir.y) < 0.99f ? glm::vec3(0.0f, 1.0f, 0.0f)
+                                                                    : glm::vec3(1.0f, 0.0f, 0.0f);
+            const glm::vec3 tangentA = glm::normalize(glm::cross(axisDir, arbitrary));
+            const glm::vec3 tangentB = glm::cross(axisDir, tangentA);
+            const float angle = (static_cast<float>(index) / kRingSegments) * glm::two_pi<float>();
+            return worldCenter + (tangentA * std::cos(angle) + tangentB * std::sin(angle)) * radius;
+        };
 
         if (draggingAxis != GizmoAxis::None) {
             if (inputSystem.IsMouseLeftHeld()) {
-                const glm::vec2 mouseDelta = mouseScreen - dragStartMouseScreen;
-                const float screenDistanceAlongAxis = glm::dot(mouseDelta, dragAxisScreenDir);
-                const float worldDelta = screenDistanceAlongAxis / dragScreenPixelsPerWorldUnit;
-                glm::vec3 axisWorld(0.0f);
-                if (draggingAxis == GizmoAxis::X) {
-                    axisWorld = glm::vec3(1.0f, 0.0f, 0.0f);
-                } else if (draggingAxis == GizmoAxis::Y) {
-                    axisWorld = glm::vec3(0.0f, 1.0f, 0.0f);
-                } else {
-                    axisWorld = glm::vec3(0.0f, 0.0f, 1.0f);
-                }
-                if (TransformComponent* transform = world.GetTransform(selectedEntity)) {
-                    const glm::vec3 localDelta =
-                        worldDeltaToLocal(selectedEntity, axisWorld * worldDelta);
-                    transform->position = dragStartEntityPosition + localDelta;
+                if (gizmoMode == GizmoMode::Rotate) {
+                    // Angle driven by the mouse's screen-space bearing around the
+                    // gizmo's own fixed screen origin (captured at drag-start), not by
+                    // projecting onto the ring's tangent -- simpler, and just as
+                    // usable, the same tradeoff Unity's own screen-space rotate gizmo
+                    // makes.
+                    const float currentAngle =
+                        std::atan2(mouseScreen.y - dragGizmoOriginScreen.y,
+                                  mouseScreen.x - dragGizmoOriginScreen.x);
+                    const float deltaAngle = currentAngle - dragStartAngleScreen;
+                    glm::vec3 canonicalAxis(0.0f);
+                    if (draggingAxis == GizmoAxis::X) {
+                        canonicalAxis = glm::vec3(1.0f, 0.0f, 0.0f);
+                    } else if (draggingAxis == GizmoAxis::Y) {
+                        canonicalAxis = glm::vec3(0.0f, 1.0f, 0.0f);
+                    } else {
+                        canonicalAxis = glm::vec3(0.0f, 0.0f, 1.0f);
+                    }
+                    // Multi-select (docs/07-unity-parity-analysis.md, the user's own
+                    // explicit request): the same canonicalAxis/deltaAngle apply to
+                    // every selected entity, but Global mode's parent-basis conversion
+                    // is still done *per entity* -- different selected entities can
+                    // have different parents (or none), each needs its own world axis
+                    // -> local axis conversion, see parentWorldBasis's own comment.
+                    for (const GizmoDragEntry& entry : dragSelection) {
+                        TransformComponent* t = world.GetTransform(entry.entity);
+                        if (t == nullptr) {
+                            continue;
+                        }
+                        if (gizmoLocalSpace) {
+                            // Local: apply around the entity's own current axis
+                            // directly -- post-multiply.
+                            t->rotation = glm::normalize(
+                                entry.startRotation * glm::angleAxis(deltaAngle, canonicalAxis));
+                        } else {
+                            // Global: the world axis has to be expressed in the
+                            // parent's local frame first, then applied via
+                            // pre-multiply instead.
+                            const glm::mat3 parentBasis = parentWorldBasis(entry.entity);
+                            const glm::vec3 localAxis =
+                                glm::normalize(glm::inverse(parentBasis) * canonicalAxis);
+                            t->rotation = glm::normalize(
+                                glm::angleAxis(deltaAngle, localAxis) * entry.startRotation);
+                        }
+                    }
+                } else if (gizmoMode == GizmoMode::Scale) {
+                    const glm::vec2 mouseDelta = mouseScreen - dragStartMouseScreen;
+                    const float screenDistanceAlongAxis = glm::dot(mouseDelta, dragAxisScreenDir);
+                    const float worldDelta = screenDistanceAlongAxis / dragScreenPixelsPerWorldUnit;
+                    constexpr float kMinScale = 0.01f;
+                    for (const GizmoDragEntry& entry : dragSelection) {
+                        TransformComponent* t = world.GetTransform(entry.entity);
+                        if (t == nullptr) {
+                            continue;
+                        }
+                        glm::vec3 newScale = entry.startScale;
+                        if (draggingAxis == GizmoAxis::X) {
+                            newScale.x = std::max(kMinScale, entry.startScale.x + worldDelta);
+                        } else if (draggingAxis == GizmoAxis::Y) {
+                            newScale.y = std::max(kMinScale, entry.startScale.y + worldDelta);
+                        } else {
+                            newScale.z = std::max(kMinScale, entry.startScale.z + worldDelta);
+                        }
+                        t->scale = newScale;
+                    }
+                } else { // Translate
+                    const glm::vec2 mouseDelta = mouseScreen - dragStartMouseScreen;
+                    const float screenDistanceAlongAxis = glm::dot(mouseDelta, dragAxisScreenDir);
+                    const float worldDelta = screenDistanceAlongAxis / dragScreenPixelsPerWorldUnit;
+                    // The dragged axis direction is always read off the *primary*
+                    // selectedEntity's own basis (matches the gizmo widget itself,
+                    // which never moves off the primary) -- the same resulting world
+                    // delta then gets converted into each selected entity's own local
+                    // space independently below (worldDeltaToLocal already handles a
+                    // per-entity parent).
+                    const glm::mat3 basis = gizmoAxisBasis(selectedEntity, gizmoLocalSpace);
+                    const glm::vec3 axisWorld = axisColumn(draggingAxis, basis);
+                    const glm::vec3 worldOffset = axisWorld * worldDelta;
+                    for (const GizmoDragEntry& entry : dragSelection) {
+                        TransformComponent* t = world.GetTransform(entry.entity);
+                        if (t == nullptr) {
+                            continue;
+                        }
+                        const glm::vec3 localDelta = worldDeltaToLocal(entry.entity, worldOffset);
+                        t->position = entry.startPosition + localDelta;
+                    }
                 }
             }
             if (inputSystem.WasMouseLeftReleasedThisFrame()) {
-                // One undo step for the whole drag gesture (post-Editor-E8), same
-                // batching reasoning as TrackFieldEdit() above -- but the gizmo drives
-                // transform->position directly from raw mouse state rather than through
-                // an ImGui widget, so there's no IsItemActivated()/
-                // IsItemDeactivatedAfterEdit() to hook; dragStartEntityPosition (already
-                // captured when the drag began, see the drag-start block below) plays the
-                // same role TrackFieldEdit()'s "captured" state does.
-                if (TransformComponent* transform = world.GetTransform(selectedEntity)) {
-                    const glm::vec3 oldPosition = dragStartEntityPosition;
-                    const glm::vec3 newPosition = transform->position;
-                    if (oldPosition != newPosition) {
+                // One undo step for the whole drag gesture across every selected
+                // entity (post-Editor-E8, extended for multi-select), same batching
+                // reasoning as TrackFieldEdit() above -- but the gizmo drives the
+                // transform field directly from raw mouse state rather than through an
+                // ImGui widget, so there's no IsItemActivated()/
+                // IsItemDeactivatedAfterEdit() to hook; dragSelection's own captured
+                // start values (from the drag-start block below) play the same role
+                // TrackFieldEdit()'s "captured" state does, one undo/redo pair covering
+                // every entity that actually ended up changed.
+                if (gizmoMode == GizmoMode::Rotate) {
+                    std::vector<std::pair<Entity, glm::quat>> oldRotations;
+                    std::vector<std::pair<Entity, glm::quat>> newRotations;
+                    for (const GizmoDragEntry& entry : dragSelection) {
+                        const TransformComponent* t = world.GetTransform(entry.entity);
+                        if (t != nullptr && t->rotation != entry.startRotation) {
+                            oldRotations.emplace_back(entry.entity, entry.startRotation);
+                            newRotations.emplace_back(entry.entity, t->rotation);
+                        }
+                    }
+                    if (!oldRotations.empty()) {
                         undoStack.Push(
-                            [&world, entity = selectedEntity, oldPosition]() {
-                                if (TransformComponent* t = world.GetTransform(entity)) {
-                                    t->position = oldPosition;
+                            [&world, oldRotations]() {
+                                for (const auto& [entity, rotation] : oldRotations) {
+                                    if (TransformComponent* t = world.GetTransform(entity)) {
+                                        t->rotation = rotation;
+                                    }
                                 }
                             },
-                            [&world, entity = selectedEntity, newPosition]() {
-                                if (TransformComponent* t = world.GetTransform(entity)) {
-                                    t->position = newPosition;
+                            [&world, newRotations]() {
+                                for (const auto& [entity, rotation] : newRotations) {
+                                    if (TransformComponent* t = world.GetTransform(entity)) {
+                                        t->rotation = rotation;
+                                    }
+                                }
+                            });
+                    }
+                } else if (gizmoMode == GizmoMode::Scale) {
+                    std::vector<std::pair<Entity, glm::vec3>> oldScales;
+                    std::vector<std::pair<Entity, glm::vec3>> newScales;
+                    for (const GizmoDragEntry& entry : dragSelection) {
+                        const TransformComponent* t = world.GetTransform(entry.entity);
+                        if (t != nullptr && t->scale != entry.startScale) {
+                            oldScales.emplace_back(entry.entity, entry.startScale);
+                            newScales.emplace_back(entry.entity, t->scale);
+                        }
+                    }
+                    if (!oldScales.empty()) {
+                        undoStack.Push(
+                            [&world, oldScales]() {
+                                for (const auto& [entity, scale] : oldScales) {
+                                    if (TransformComponent* t = world.GetTransform(entity)) {
+                                        t->scale = scale;
+                                    }
+                                }
+                            },
+                            [&world, newScales]() {
+                                for (const auto& [entity, scale] : newScales) {
+                                    if (TransformComponent* t = world.GetTransform(entity)) {
+                                        t->scale = scale;
+                                    }
+                                }
+                            });
+                    }
+                } else {
+                    std::vector<std::pair<Entity, glm::vec3>> oldPositions;
+                    std::vector<std::pair<Entity, glm::vec3>> newPositions;
+                    for (const GizmoDragEntry& entry : dragSelection) {
+                        const TransformComponent* t = world.GetTransform(entry.entity);
+                        if (t != nullptr && t->position != entry.startPosition) {
+                            oldPositions.emplace_back(entry.entity, entry.startPosition);
+                            newPositions.emplace_back(entry.entity, t->position);
+                        }
+                    }
+                    if (!oldPositions.empty()) {
+                        undoStack.Push(
+                            [&world, oldPositions]() {
+                                for (const auto& [entity, position] : oldPositions) {
+                                    if (TransformComponent* t = world.GetTransform(entity)) {
+                                        t->position = position;
+                                    }
+                                }
+                            },
+                            [&world, newPositions]() {
+                                for (const auto& [entity, position] : newPositions) {
+                                    if (TransformComponent* t = world.GetTransform(entity)) {
+                                        t->position = position;
+                                    }
                                 }
                             });
                     }
                 }
                 draggingAxis = GizmoAxis::None;
+                dragSelection.clear();
             }
         } else if (!mouseOverImGui && inputSystem.WasMouseLeftPressedThisFrame()) {
             // Try the gizmo first (only meaningful if something is already selected), then
@@ -2752,14 +3093,21 @@ int main(int argc, char** argv) {
                     const glm::vec2 originScreen = WorldToScreen(
                         worldPosition, viewportWidth, viewportHeight, viewProj, behindCamera);
 
+                    // Scale is always local to the entity itself regardless of the
+                    // Local/Global toggle -- a non-uniform *world*-space scale would
+                    // shear the mesh, not a supported operation here (matches Unity's
+                    // own scale gizmo, which likewise never offers a Global mode).
+                    const bool basisIsLocal = gizmoMode == GizmoMode::Scale || gizmoLocalSpace;
+                    const glm::mat3 basis = gizmoAxisBasis(selectedEntity, basisIsLocal);
+
                     struct AxisEntry {
                         GizmoAxis axis;
                         glm::vec3 direction;
                     };
                     const AxisEntry axes[] = {
-                        {GizmoAxis::X, glm::vec3(1.0f, 0.0f, 0.0f)},
-                        {GizmoAxis::Y, glm::vec3(0.0f, 1.0f, 0.0f)},
-                        {GizmoAxis::Z, glm::vec3(0.0f, 0.0f, 1.0f)},
+                        {GizmoAxis::X, basis[0]},
+                        {GizmoAxis::Y, basis[1]},
+                        {GizmoAxis::Z, basis[2]},
                     };
 
                     constexpr float kGizmoPickPixels = 10.0f;
@@ -2767,28 +3115,62 @@ int main(int argc, char** argv) {
                     GizmoAxis hitAxis = GizmoAxis::None;
                     glm::vec2 hitAxisScreenDir(0.0f);
                     float hitScreenPixelsPerWorldUnit = 1.0f;
+                    float hitAngleScreen = 0.0f;
 
                     if (!behindCamera) {
-                        for (const AxisEntry& entry : axes) {
-                            bool tipBehindCamera = false;
-                            const glm::vec2 tipScreen = WorldToScreen(
-                                worldPosition + entry.direction * gizmoWorldLength,
-                                viewportWidth, viewportHeight, viewProj, tipBehindCamera);
-                            if (tipBehindCamera) {
-                                continue;
+                        if (gizmoMode == GizmoMode::Rotate) {
+                            // Ring hit-test: each axis's ring is approximated as
+                            // kRingSegments straight segments in screen space, the
+                            // same DistancePointToSegment test the straight axis
+                            // lines use below.
+                            for (const AxisEntry& entry : axes) {
+                                glm::vec2 previousScreen(0.0f);
+                                bool previousValid = false;
+                                for (int i = 0; i <= kRingSegments; ++i) {
+                                    const glm::vec3 ringWorld = ringPoint(
+                                        worldPosition, entry.direction, gizmoWorldLength, i);
+                                    bool pointBehindCamera = false;
+                                    const glm::vec2 pointScreen =
+                                        WorldToScreen(ringWorld, viewportWidth, viewportHeight,
+                                                     viewProj, pointBehindCamera);
+                                    if (!pointBehindCamera && previousValid) {
+                                        const float distance = DistancePointToSegment(
+                                            mouseScreen, previousScreen, pointScreen);
+                                        if (distance < closestDistance) {
+                                            closestDistance = distance;
+                                            hitAxis = entry.axis;
+                                        }
+                                    }
+                                    previousScreen = pointScreen;
+                                    previousValid = !pointBehindCamera;
+                                }
                             }
-                            const float distance =
-                                DistancePointToSegment(mouseScreen, originScreen, tipScreen);
-                            if (distance < closestDistance) {
-                                closestDistance = distance;
-                                hitAxis = entry.axis;
-                                const glm::vec2 screenDelta = tipScreen - originScreen;
-                                const float screenLength = glm::length(screenDelta);
-                                hitAxisScreenDir = screenLength > 0.0001f
-                                                       ? screenDelta / screenLength
-                                                       : glm::vec2(0.0f);
-                                hitScreenPixelsPerWorldUnit =
-                                    std::max(screenLength / gizmoWorldLength, 0.0001f);
+                            if (hitAxis != GizmoAxis::None) {
+                                hitAngleScreen = std::atan2(mouseScreen.y - originScreen.y,
+                                                            mouseScreen.x - originScreen.x);
+                            }
+                        } else {
+                            for (const AxisEntry& entry : axes) {
+                                bool tipBehindCamera = false;
+                                const glm::vec2 tipScreen = WorldToScreen(
+                                    worldPosition + entry.direction * gizmoWorldLength,
+                                    viewportWidth, viewportHeight, viewProj, tipBehindCamera);
+                                if (tipBehindCamera) {
+                                    continue;
+                                }
+                                const float distance =
+                                    DistancePointToSegment(mouseScreen, originScreen, tipScreen);
+                                if (distance < closestDistance) {
+                                    closestDistance = distance;
+                                    hitAxis = entry.axis;
+                                    const glm::vec2 screenDelta = tipScreen - originScreen;
+                                    const float screenLength = glm::length(screenDelta);
+                                    hitAxisScreenDir = screenLength > 0.0001f
+                                                           ? screenDelta / screenLength
+                                                           : glm::vec2(0.0f);
+                                    hitScreenPixelsPerWorldUnit =
+                                        std::max(screenLength / gizmoWorldLength, 0.0001f);
+                                }
                             }
                         }
                     }
@@ -2797,8 +3179,26 @@ int main(int argc, char** argv) {
                         draggingAxis = hitAxis;
                         dragStartMouseScreen = mouseScreen;
                         dragStartEntityPosition = transform->position;
+                        dragStartEntityRotation = transform->rotation;
+                        dragStartEntityScale = transform->scale;
                         dragAxisScreenDir = hitAxisScreenDir;
                         dragScreenPixelsPerWorldUnit = hitScreenPixelsPerWorldUnit;
+                        dragStartAngleScreen = hitAngleScreen;
+                        dragGizmoOriginScreen = originScreen;
+                        // Multi-select (docs/07-unity-parity-analysis.md, the user's
+                        // own explicit request): snapshot every currently selected
+                        // entity's own starting transform, not just the primary's --
+                        // see GizmoDragEntry's own comment for how the drag-update loop
+                        // above uses this.
+                        dragSelection.clear();
+                        for (const Entity entity : currentMultiSelection()) {
+                            if (const TransformComponent* entityTransform =
+                                    world.GetTransform(entity)) {
+                                dragSelection.push_back({entity, entityTransform->position,
+                                                         entityTransform->rotation,
+                                                         entityTransform->scale});
+                            }
+                        }
                         startedGizmoDrag = true;
                     }
                 }
@@ -2841,7 +3241,18 @@ int main(int argc, char** argv) {
                         closestEntity = candidate;
                     }
                 }
-                selectedEntity = closestEntity;
+                if (closestEntity == engine::ecs::kInvalidEntity) {
+                    // Empty-space click clears the selection outright -- but a
+                    // Ctrl-click on empty space deliberately leaves an existing
+                    // multi-selection untouched, matching Unity's own convention (only
+                    // a plain click resets it).
+                    if (!ImGui::GetIO().KeyCtrl) {
+                        selectedEntity = engine::ecs::kInvalidEntity;
+                        selectedEntities.clear();
+                    }
+                } else {
+                    applySelectionClick(closestEntity);
+                }
             }
         }
 
@@ -2851,28 +3262,61 @@ int main(int argc, char** argv) {
         //     separate pass rather than merged into it since drawing must happen every
         //     frame regardless of whether a click happened this frame. ---
         if (world.IsAlive(selectedEntity) && world.HasTransform(selectedEntity)) {
-            {
-                const glm::vec3 worldPosition = worldPositionOf(selectedEntity);
-                const glm::vec3 cameraEye = glm::vec3(glm::inverse(camera.GetViewMatrix())[3]);
-                const float distanceToCamera =
-                    std::max(glm::length(worldPosition - cameraEye), 0.001f);
-                const float gizmoWorldLength = std::max(distanceToCamera * 0.15f, 0.3f);
+            const glm::vec3 worldPosition = worldPositionOf(selectedEntity);
+            const glm::vec3 cameraEye = glm::vec3(glm::inverse(camera.GetViewMatrix())[3]);
+            const float distanceToCamera = std::max(glm::length(worldPosition - cameraEye), 0.001f);
+            const float gizmoWorldLength = std::max(distanceToCamera * 0.15f, 0.3f);
 
-                bool originBehindCamera = false;
-                const glm::vec2 originScreen = WorldToScreen(
-                    worldPosition, viewportWidth, viewportHeight, viewProj, originBehindCamera);
-                if (!originBehindCamera) {
-                    ImDrawList* drawList = ImGui::GetForegroundDrawList();
-                    struct AxisDrawEntry {
-                        glm::vec3 direction;
-                        ImU32 color;
-                        GizmoAxis axis;
-                    };
-                    const AxisDrawEntry axesToDraw[] = {
-                        {glm::vec3(1.0f, 0.0f, 0.0f), IM_COL32(230, 60, 60, 255), GizmoAxis::X},
-                        {glm::vec3(0.0f, 1.0f, 0.0f), IM_COL32(60, 220, 60, 255), GizmoAxis::Y},
-                        {glm::vec3(0.0f, 0.0f, 1.0f), IM_COL32(70, 130, 240, 255), GizmoAxis::Z},
-                    };
+            bool originBehindCamera = false;
+            const glm::vec2 originScreen = WorldToScreen(
+                worldPosition, viewportWidth, viewportHeight, viewProj, originBehindCamera);
+            if (!originBehindCamera) {
+                ImDrawList* drawList = ImGui::GetForegroundDrawList();
+                // Same basis rule the hit-test above uses -- drawn geometry must match
+                // what's clickable, see basisIsLocal's own comment there for why Scale
+                // is special-cased.
+                const bool basisIsLocal = gizmoMode == GizmoMode::Scale || gizmoLocalSpace;
+                const glm::mat3 basis = gizmoAxisBasis(selectedEntity, basisIsLocal);
+                struct AxisDrawEntry {
+                    glm::vec3 direction;
+                    ImU32 color;
+                    GizmoAxis axis;
+                };
+                const AxisDrawEntry axesToDraw[] = {
+                    {basis[0], IM_COL32(230, 60, 60, 255), GizmoAxis::X},
+                    {basis[1], IM_COL32(60, 220, 60, 255), GizmoAxis::Y},
+                    {basis[2], IM_COL32(70, 130, 240, 255), GizmoAxis::Z},
+                };
+                if (gizmoMode == GizmoMode::Rotate) {
+                    // Three rings, one per axis, each approximated as kRingSegments
+                    // straight segments -- the exact same shape ringPoint()/the
+                    // hit-test above already use, kept in sync deliberately (drawn
+                    // geometry must match what's clickable).
+                    for (const AxisDrawEntry& entry : axesToDraw) {
+                        const float thickness = draggingAxis == entry.axis ? 4.0f : 2.0f;
+                        glm::vec2 previousScreen(0.0f);
+                        bool previousValid = false;
+                        for (int i = 0; i <= kRingSegments; ++i) {
+                            const glm::vec3 ringWorld =
+                                ringPoint(worldPosition, entry.direction, gizmoWorldLength, i);
+                            bool pointBehindCamera = false;
+                            const glm::vec2 pointScreen = WorldToScreen(
+                                ringWorld, viewportWidth, viewportHeight, viewProj,
+                                pointBehindCamera);
+                            if (!pointBehindCamera && previousValid) {
+                                drawList->AddLine(ImVec2(previousScreen.x, previousScreen.y),
+                                                  ImVec2(pointScreen.x, pointScreen.y),
+                                                  entry.color, thickness);
+                            }
+                            previousScreen = pointScreen;
+                            previousValid = !pointBehindCamera;
+                        }
+                    }
+                } else {
+                    // Translate (circle tips) and Scale (square tips) share the same
+                    // straight-line shape, only the tip marker differs -- matches
+                    // Unity's own visual convention for telling the two gizmo modes
+                    // apart at a glance.
                     for (const AxisDrawEntry& entry : axesToDraw) {
                         bool tipBehindCamera = false;
                         const glm::vec2 tipScreen = WorldToScreen(
@@ -2884,7 +3328,16 @@ int main(int argc, char** argv) {
                         const float thickness = draggingAxis == entry.axis ? 5.0f : 3.0f;
                         drawList->AddLine(ImVec2(originScreen.x, originScreen.y),
                                           ImVec2(tipScreen.x, tipScreen.y), entry.color, thickness);
-                        drawList->AddCircleFilled(ImVec2(tipScreen.x, tipScreen.y), 4.0f, entry.color);
+                        if (gizmoMode == GizmoMode::Scale) {
+                            constexpr float kHalfSize = 4.0f;
+                            drawList->AddRectFilled(
+                                ImVec2(tipScreen.x - kHalfSize, tipScreen.y - kHalfSize),
+                                ImVec2(tipScreen.x + kHalfSize, tipScreen.y + kHalfSize),
+                                entry.color);
+                        } else {
+                            drawList->AddCircleFilled(ImVec2(tipScreen.x, tipScreen.y), 4.0f,
+                                                      entry.color);
+                        }
                     }
                 }
             }

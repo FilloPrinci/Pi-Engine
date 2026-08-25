@@ -19,8 +19,8 @@
 
 | Area | Status | Unity has | Pi-Engine has |
 |---|---|---|---|
-| Scene View navigation | Partial | Mouse-look free camera, focus-on-selection, gizmos | Keyboard orbit camera (A/D/W/S/Up/Down) plus mouse-look (hold the right mouse button and drag to orbit -- additive, not a replacement for the keyboard controls) — a translate gizmo now exists (see below) but there's still no focus-on-selection shortcut |
-| Object selection/manipulation | Partial | Click-select in viewport, move/rotate/scale gizmos, multi-select | Click-select directly in the viewport now works (ray vs. each entity's bounding sphere, closest hit wins) alongside the existing Scene-panel list click, and a translate gizmo (drag a colored axis to move) appears on the selection — real progress, but still translate-only (no rotate/scale gizmo), world-space axes only (no local/global toggle), single selection only, and picking is a sphere approximation so a very flat/elongated mesh (e.g. a thin ground slab) has a picking volume noticeably larger than its visible silhouette |
+| Scene View navigation | Partial | Mouse-look free camera, focus-on-selection, gizmos | Keyboard orbit camera (A/D/W/S/Up/Down) plus mouse-look (hold the right mouse button and drag to orbit -- additive, not a replacement for the keyboard controls) — a full Translate/Rotate/Scale gizmo now exists (see below) but there's still no focus-on-selection shortcut |
+| Object selection/manipulation | Partial | Click-select in viewport, move/rotate/scale gizmos, multi-select | Click-select directly in the viewport works (ray vs. each entity's bounding sphere, closest hit wins) alongside the Hierarchy panel's own list click, with a Translate/Rotate/Scale gizmo (toolbar buttons switch mode) and a Local/Global toggle (Scale always stays local -- a non-uniform world-space scale would shear the mesh, not a supported operation, matching Unity's own Scale gizmo). Rotate's drag angle is screen-space `atan2` around the gizmo's own fixed origin, applied as a delta quaternion (pre- or post-multiply depending on Local/Global, the world-axis case first converting into the entity's own parent's local frame); Scale drags set `TransformComponent::scale` directly per axis. Ctrl-click (in either the viewport or the Hierarchy panel) adds/removes an entity from the selection; a plain click replaces it. Multi-select is deliberately narrow, not a full Unity-parity implementation: the Inspector still edits only the single "primary" (last-clicked) entity, right-click Delete in the Hierarchy is still single-entity-only, and there's no pivot/center-of-selection mode -- a multi-entity gizmo drag applies the identical delta to every selected entity independently, each still around its own origin. One combined Undo/Redo step covers every entity a drag actually changed. Picking itself is still a sphere approximation, so a very flat/elongated mesh (e.g. a thin ground slab) has a picking volume noticeably larger than its visible silhouette |
 | Hierarchy (parent-child) | Partial | Nested transforms, drag-to-reparent | `TransformComponent` has a `parent` field, composed into a real world matrix by `World::GetWorldMatrix()` (Editor Scene View and Play Mode both render through it); the Scene panel shows entities as an indented tree instead of a flat list; both the Inspector's "Parent" combo box and now drag-and-drop *in* the Hierarchy panel itself (drag one row onto another to reparent, or onto the empty space below the tree to un-parent to root) reparent through the same cycle-safe `SetParentWithUndo()` helper (`World::IsDescendantOf()`-checked) — what's still missing next to Unity is per-node collapse/expand (always fully expanded, an accepted v1 simplification) |
 | Inspector — component add/remove | Have | "Add Component" dropdown, remove via context menu | "Add Component" row (Mesh/Collider/Rigidbody/Light, only offering types the entity doesn't already have) and a "Remove X" button per component section, both fully undoable ("make everything the Editor shows manageable" phases 1 and 5) — Create Empty/Create Cube and the Hierarchy's own "Delete" are undoable too, including a deleted entity's children being correctly re-parented back on Undo |
 | Undo/Redo | Have | Ctrl+Z/Y across the whole Editor | A generic `UndoStack` (`editor/UndoStack.h`) backs every Inspector field edit (Transform/Mesh/Collider/Rigidbody/Light), Parent reparenting, the viewport gizmo drag, Add/Remove Component, and Create/Delete Entity (phase 5 — the last of these needed a `std::shared_ptr<Entity>` "cell" shared across a whole undo/redo chain, since the same conceptual object gets a genuinely new `Entity` handle, different generation, every time it's destroyed and recreated) — Ctrl+Z/Ctrl+Y (also Ctrl+Shift+Z) plus Undo/Redo buttons in the Editor's info window; a whole drag-release gesture is one undo step, not one per intermediate value. Not covered yet: Save/Play aren't undoable (neither is meaningful to undo), material property edits/assignment aren't (a separate asset file, not part of the scene document — an accepted gap, same shape as "Save/Play aren't undoable"), and there's no visible undo *history* list (just linear back/forward, matching Unity's own default keyboard behavior, just without its optional history window) |
@@ -49,19 +49,31 @@
 Ranked by how much they'd help the stated goal (retro low-poly indie games on Pi4/Pi5),
 not by how large the gap looks above:
 
-1. ~~Viewport object picking + a translate gizmo.~~ **Done** (`editor/main.cpp`: ray-vs-
-   bounding-sphere picking directly in the 3D view, plus a draggable X/Y/Z translate gizmo
-   drawn via ImGui's foreground draw list) — position edits no longer have to go through
-   the Inspector's numeric `DragFloat3` alone. Needed real mouse-input plumbing first
+1. ~~Viewport object picking + a translate gizmo.~~ **Done**, then extended to a full
+   Translate/Rotate/Scale gizmo with a Local/Global toggle and multi-select (`editor/main.cpp`:
+   ray-vs-bounding-sphere picking directly in the 3D view, plus a draggable gizmo drawn via
+   ImGui's foreground draw list) — position/rotation/scale edits no longer have to go
+   through the Inspector's numeric fields alone. Needed real mouse-input plumbing first
    (`InputState`/`InputSystem`/`SDL2DisplayBackend` all gained mouse support, previously
    keyboard-only) and a real bugfix along the way: a synthetic (or very fast real) click
    whose down-and-up both land inside one `PollEvents()` poll was invisible to a
    once-per-frame `SDL_GetMouseState()` query — fixed by latching "held" for that frame
    whenever a down *event* was seen, so InputSystem's press/release edges always see a
-   real (if one-frame) press before a release. What's left here (rotate/scale gizmos,
-   local- vs. world-space toggle, multi-select) is real Unity functionality this still
-   doesn't have, but translate-only was the actual workflow gap, so it's dropped off this
-   top-5 list rather than kept at the top.
+   real (if one-frame) press before a release. Rotate/Scale/Local-Global/multi-select
+   (the user's own explicit follow-up request) shipped afterward: Rotate hit-tests a
+   ring (line-segment-approximated) per axis and drives its delta off the mouse's
+   screen-space bearing around the gizmo's own origin; Scale always stays local
+   (matches Unity, a non-uniform world-space scale would shear the mesh); multi-select
+   is Ctrl-click in either the viewport or the Hierarchy, deliberately scoped so the
+   Inspector/Delete stay single-entity while gizmo drags apply the same delta to every
+   selected entity independently. Testing note, not a code gap: `wlrctl` (this project's
+   remote-Pi4 input-synthesis tool) has no way to hold a mouse button across multiple
+   moved-then-clicked frames or to hold a modifier key alongside a separate pointer
+   click, so the actual drag mechanics and Ctrl-click toggling were verified by careful
+   code review rather than a live recording, the same limitation already noted for the
+   Hierarchy's own drag-and-drop reparenting below — everything clickable (mode-toggle
+   buttons, Local/Global toggle, plain single-select, the resulting gizmo shape per
+   mode) was verified live on Pi4 with screenshots.
 2. ~~Hierarchy / parent-child transforms.~~ **Done** (`TransformComponent::parent`,
    `World::GetWorldMatrix()`/`IsDescendantOf()`, an indented Scene panel tree, an
    Inspector "Parent" combo) — grouping (a vehicle's wheels, a character's held item) now
